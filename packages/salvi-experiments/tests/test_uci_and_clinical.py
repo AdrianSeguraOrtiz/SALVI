@@ -25,6 +25,7 @@ from salvi_experiments.dataset.clinical import (
     ClinicalValidationConfiguration,
     RepertoireReference,
     calculate_clinical_associations,
+    calculate_reference_bicluster_stability,
     calculate_repertoire_stability,
     run_clinical_validation,
 )
@@ -450,6 +451,7 @@ def test_clinical_associations_and_validation_artifacts(
     assert outcome["evaluable"] is True
     assert outcome["test"] == "fisher_exact"
     assert float(outcome["p_value"]) < 0.05
+    assert outcome["fdr_family"] == "OUTCOME::outcome"
     survival = next(item for item in associations if item["annotation"] == "time")
     assert survival["test"] == "log_rank"
     assert survival["effect_type"] == "hazard_ratio"
@@ -496,3 +498,38 @@ def test_repertoire_stability_matches_identical_structures(
     )
     assert stability[0]["mean_matched_stability"] == pytest.approx(1.0)
     assert stability[0]["coverage_at_0_75"] == pytest.approx(1.0)
+    per_bicluster = calculate_reference_bicluster_stability(
+        RepertoireReference(
+            identifier="first",
+            dataset_bundle=dataset,
+            bicluster_set=first,
+        ),
+        (
+            RepertoireReference(
+                identifier="second",
+                dataset_bundle=dataset,
+                bicluster_set=second,
+            ),
+        ),
+    )
+    assert per_bicluster[0]["support_fraction"] == pytest.approx(1.0)
+
+    reference = RepertoireReference(
+        identifier="first",
+        dataset_bundle=dataset,
+        bicluster_set=first,
+    )
+    with pytest.raises(ValueError, match="at least one comparison"):
+        calculate_reference_bicluster_stability(reference, ())
+    with pytest.raises(ValueError, match="threshold"):
+        calculate_reference_bicluster_stability(
+            reference,
+            (
+                RepertoireReference(
+                    identifier="second",
+                    dataset_bundle=dataset,
+                    bicluster_set=second,
+                ),
+            ),
+            threshold=0.0,
+        )

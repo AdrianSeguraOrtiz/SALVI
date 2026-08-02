@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
@@ -38,6 +39,7 @@ class ClinicalTestingConfiguration(FrozenExperimentModel):
     minimum_nonmembers: Annotated[int, Field(ge=1)] = 20
     minimum_events: Annotated[int, Field(ge=1)] = 10
     fdr_alpha: Annotated[float, Field(gt=0.0, lt=1.0)] = 0.05
+    fdr_scope: Literal["ALL", "ROLE", "ANNOTATION"] = "ANNOTATION"
 
 
 class ClinicalValidationConfiguration(FrozenExperimentModel):
@@ -109,6 +111,32 @@ def _benjamini_hochberg(records: list[dict[str, object]]) -> None:
         rank = count - reverse_rank + 1
         adjusted = min(adjusted, p_value * count / rank)
         records[index]["q_value"] = adjusted
+
+
+def adjust_clinical_association_fdr(
+    records: Sequence[Mapping[str, object]],
+    *,
+    alpha: float = 0.05,
+    scope: Literal["ALL", "ROLE", "ANNOTATION"] = "ANNOTATION",
+) -> tuple[dict[str, object], ...]:
+    adjusted = [dict(record) for record in records]
+    groups: dict[str, list[dict[str, object]]] = {}
+    for record in adjusted:
+        record["q_value"] = None
+        key = {
+            "ALL": "ALL",
+            "ROLE": str(record.get("role")),
+            "ANNOTATION": f"{record.get('role')}::{record.get('annotation')}",
+        }[scope]
+        groups.setdefault(key, []).append(record)
+    for key, group in groups.items():
+        _benjamini_hochberg(group)
+        for record in group:
+            record["fdr_family"] = key
+    for record in adjusted:
+        q_value = record.get("q_value")
+        record["fdr_significant"] = isinstance(q_value, int | float) and q_value <= alpha
+    return tuple(adjusted)
 
 
 def _binary_association(
@@ -407,13 +435,11 @@ def calculate_clinical_associations(
                         }
                     )
             records.append(base)
-    _benjamini_hochberg(records)
-    for record in records:
-        q_value = record.get("q_value")
-        record["fdr_significant"] = (
-            isinstance(q_value, (int, float)) and q_value <= configuration.fdr_alpha
-        )
-    return tuple(records)
+    return adjust_clinical_association_fdr(
+        records,
+        alpha=configuration.fdr_alpha,
+        scope=configuration.fdr_scope,
+    )
 
 
 def characterize_biclusters(
@@ -476,9 +502,15 @@ def characterize_biclusters(
     return tuple(records)
 
 
-def _structures(
-    reference: RepertoireReference,
-) -> tuple[tuple[frozenset[str], frozenset[str], Mapping[str, str]], ...]:
+@dataclass(frozen=True, slots=True)
+class _Structure:
+    identifier: str
+    rows: frozenset[str]
+    columns: frozenset[str]
+    patterns: Mapping[str, str]
+
+
+def _structures(reference: RepertoireReference) -> tuple[_Structure, ...]:
     dataset = DatasetBundleReader().load(reference.dataset_bundle)
     contents = BiclusterSetReader().read_contents(reference.bicluster_set)
     row_ids = tuple(str(value) for value in dataset.row_identifiers.to_pylist())
@@ -498,7 +530,14 @@ def _structures(
                 for column in evaluation.pattern_fit.columns
             }
         )
-        structures.append((rows, columns, patterns))
+        structures.append(
+            _Structure(
+                identifier=evaluation.candidate.identifier,
+                rows=rows,
+                columns=columns,
+                patterns=patterns,
+            )
+        )
     return tuple(structures)
 
 
@@ -519,6 +558,36 @@ def _pattern_concordance(
     )
 
 
+def _stability_scores(
+    left: Sequence[_Structure],
+    right: Sequence[_Structure],
+) -> np.ndarray:
+    scores = np.zeros((len(left), len(right)), dtype=np.float64)
+    for row, left_structure in enumerate(left):
+        for column, right_structure in enumerate(right):
+            row_score = _jaccard(left_structure.rows, right_structure.rows)
+            column_score = _jaccard(left_structure.columns, right_structure.columns)
+            shared_columns = left_structure.columns & right_structure.columns
+            scores[row, column] = math.sqrt(row_score * column_score) * _pattern_concordance(
+                left_structure.patterns,
+                right_structure.patterns,
+                shared_columns,
+            )
+    return scores
+
+
+def _matched_scores_by_left(
+    left: Sequence[_Structure],
+    right: Sequence[_Structure],
+) -> np.ndarray:
+    scores = _stability_scores(left, right)
+    matched = np.zeros(len(left), dtype=np.float64)
+    if scores.size:
+        row_indices, column_indices = linear_sum_assignment(-scores)
+        matched[row_indices] = scores[row_indices, column_indices]
+    return matched
+
+
 def calculate_repertoire_stability(
     references: Sequence[RepertoireReference],
     *,
@@ -533,17 +602,7 @@ def calculate_repertoire_stability(
         for right_reference in references[left_index + 1 :]:
             left = loaded[left_reference.identifier]
             right = loaded[right_reference.identifier]
-            scores = np.zeros((len(left), len(right)), dtype=np.float64)
-            for row, (left_rows, left_columns, left_patterns) in enumerate(left):
-                for column, (right_rows, right_columns, right_patterns) in enumerate(right):
-                    shared_rows = left_rows & right_rows
-                    row_union = left_rows | right_rows
-                    row_score = 1.0 if not row_union else len(shared_rows) / len(row_union)
-                    column_score = _jaccard(left_columns, right_columns)
-                    shared_columns = left_columns & right_columns
-                    scores[row, column] = math.sqrt(
-                        row_score * column_score
-                    ) * _pattern_concordance(left_patterns, right_patterns, shared_columns)
+            scores = _stability_scores(left, right)
             if scores.size:
                 row_indices, column_indices = linear_sum_assignment(-scores)
                 matched = scores[row_indices, column_indices]
@@ -564,6 +623,43 @@ def calculate_repertoire_stability(
                     int(np.count_nonzero(matched >= threshold)) / denominator
                 )
             records.append(record)
+    return tuple(records)
+
+
+def calculate_reference_bicluster_stability(
+    reference: RepertoireReference,
+    comparisons: Sequence[RepertoireReference],
+    *,
+    threshold: float = 0.5,
+) -> tuple[dict[str, object], ...]:
+    if not comparisons:
+        raise ValueError("reference stability requires at least one comparison")
+    if not 0.0 < threshold <= 1.0:
+        raise ValueError("reference stability threshold must be in (0, 1]")
+    reference_structures = _structures(reference)
+    matched_by_comparison = np.vstack(
+        [
+            _matched_scores_by_left(reference_structures, _structures(comparison))
+            for comparison in comparisons
+        ]
+    )
+    records: list[dict[str, object]] = []
+    for index, structure in enumerate(reference_structures):
+        scores = matched_by_comparison[:, index]
+        records.append(
+            {
+                "reference": reference.identifier,
+                "bicluster_id": structure.identifier,
+                "comparison_count": len(comparisons),
+                "match_threshold": threshold,
+                "matched_count": int(np.count_nonzero(scores >= threshold)),
+                "support_fraction": float(np.mean(scores >= threshold)),
+                "mean_matched_stability": float(np.mean(scores)),
+                "median_matched_stability": float(np.median(scores)),
+                "minimum_matched_stability": float(np.min(scores)),
+                "maximum_matched_stability": float(np.max(scores)),
+            }
+        )
     return tuple(records)
 
 
@@ -632,7 +728,9 @@ __all__ = [
     "ClinicalValidationConfiguration",
     "RepertoireReference",
     "StabilityConfiguration",
+    "adjust_clinical_association_fdr",
     "calculate_clinical_associations",
+    "calculate_reference_bicluster_stability",
     "calculate_repertoire_stability",
     "characterize_biclusters",
     "load_clinical_validation_configuration",
