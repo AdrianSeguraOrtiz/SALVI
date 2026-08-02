@@ -1,0 +1,172 @@
+schema_version: 1
+patterns:
+  allowed:
+  - CONSTANT
+preprocessing:
+  missing_values:
+    name: preserve
+  numeric_transformations:
+  - name: robust_numeric_scaling
+evaluation:
+  candidate_validity:
+    name: minimum_cardinality
+    parameters:
+      min_rows: 10
+      min_columns: 10
+  observed_support:
+    name: minimum_observed_support
+    parameters:
+      min_observed_count: 2
+      min_observed_ratio: 0.5
+search:
+  engine:
+    name: serial_mome
+    parameters:
+      initial_population_size: 64
+      batch_size: 16
+  objectives:
+  - name: internal_coherence
+  - name: contrast
+    parameters:
+      min_background_ratio: 0.1
+  descriptors:
+  - name: row_cardinality
+  - name: column_cardinality
+  archive:
+    name: deep_grid_mome
+    parameters:
+      axes:
+      - descriptor: row_cardinality
+        binning: GEOMETRIC
+        bins: 8
+      - descriptor: column_cardinality
+        binning: GEOMETRIC
+        bins: 8
+      cell_capacity: 8
+  parent_selection:
+    name: cell_uniform_quality
+  mate_selection:
+    name: cell_first_evidence_compatible
+    parameters:
+      parent_pool_size: 32
+      mate_pool_size: 4
+      minimum_row_jaccard: 0.1
+      minimum_column_jaccard: 0.1
+      cell_neighborhood_radius: 1
+  crossover:
+    name: evidence_weighted_recombination
+    parameters:
+      application_probability: 1.0
+      row_exchange_probability: 0.5
+      column_exchange_probability: 0.5
+  initialization:
+    name: cell_coverage_pattern_aware
+    parameters:
+      seeds_per_cell: 4
+      max_attempts_per_cell: 12
+      joint_column_candidate_pool_size: 32
+  emitters:
+  - name: add_row
+    parameters:
+      guided: true
+      parent_pool_size: 16
+      candidate_pool_size: 64
+  - name: remove_row
+    parameters:
+      guided: true
+      parent_pool_size: 16
+      candidate_pool_size: 64
+  - name: swap_row
+    parameters:
+      guided: true
+      parent_pool_size: 16
+      candidate_pool_size: 64
+  - name: add_column
+    parameters:
+      guided: true
+      parent_pool_size: 16
+      candidate_pool_size: 64
+  - name: remove_column
+    parameters:
+      guided: true
+      parent_pool_size: 16
+      candidate_pool_size: 64
+  - name: swap_column
+    parameters:
+      guided: true
+      parent_pool_size: 16
+      candidate_pool_size: 64
+  - name: shape_move
+    parameters:
+      guided: true
+      parent_pool_size: 16
+      candidate_pool_size: 64
+  - name: crossover
+    parameters:
+      max_attempts: 8
+  - name: cell_coverage_restart
+    parameters:
+      joint_column_candidate_pool_size: 32
+  scheduler:
+    name: cell_balanced_adaptive_credit
+    parameters:
+      exploration_weight: 0.5
+      new_cell_reward: 1.0
+      insertion_reward: 0.25
+      underexplored_cell_weight: 1.0
+  termination:
+    name: evaluation_budget
+    parameters:
+      max_evaluations: 50000
+execution:
+  executor:
+    name: process_pool
+    parameters:
+      integration_mode: DETERMINISTIC
+      max_in_flight: 8
+  workers: 4
+monitoring:
+  checkpoint_interval_evaluations: 5000
+  observers:
+  - name: search_progress
+  - name: archive_coverage
+  - name: candidate_outcomes
+    parameters:
+      every_evaluations: 1000
+  - name: emitter_credit
+    parameters:
+      every_evaluations: 1000
+  - name: component_timing
+    parameters:
+      every_evaluations: 1000
+  - name: evaluation_issues
+    parameters:
+      every_evaluations: 1000
+  - name: qd_archive_diagnostics
+    parameters:
+      every_evaluations: 1000
+      include_cell_metrics: false
+  - name: objective_distribution
+    parameters:
+      every_evaluations: 1000
+  - name: descriptor_distribution
+    parameters:
+      every_evaluations: 1000
+  - name: archive_descriptor_distribution
+    parameters:
+      every_evaluations: 1000
+  - name: candidate_diversity
+    parameters:
+      window_size: 512
+      distance_sample_size: 128
+      row_weight: 0.5
+      every_evaluations: 1000
+  - name: runtime_throughput
+  - name: resource_usage
+    parameters:
+      every_evaluations: 1000
+final_selection:
+  name: containment_marginal_quality
+  parameters:
+    max_objective_degradation: 0.15
+    max_degradation_per_log_area_gain: 0.2

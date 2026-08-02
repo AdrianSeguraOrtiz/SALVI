@@ -1,0 +1,13 @@
+schema_version: 1
+identifier: example-objective-alignment
+pipeline_configuration: ../smoke-configuration.yaml
+dataset_bundle: ../example-dataset
+output_directory: ../../experiment-results/objective-alignment
+analysis_seed: 17
+task:
+  included_patterns: [CONSTANT]
+sampling:
+  random_controls: 100
+  perturbations: 20
+  perturbation_ratio: 0.10
+overwrite: true

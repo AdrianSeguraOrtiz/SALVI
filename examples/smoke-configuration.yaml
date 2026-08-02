@@ -1,0 +1,61 @@
+schema_version: 1
+patterns:
+  allowed:
+  - CONSTANT
+preprocessing:
+  missing_values:
+    name: preserve
+  numeric_transformations:
+  - name: robust_numeric_scaling
+evaluation:
+  candidate_validity:
+    name: minimum_cardinality
+    parameters:
+      min_rows: 2
+      min_columns: 2
+  observed_support:
+    name: minimum_observed_support
+    parameters:
+      min_observed_count: 2
+      min_observed_ratio: 0.8
+search:
+  engine:
+    name: serial_mome
+    parameters:
+      initial_population_size: 4
+      batch_size: 2
+  objectives:
+  - name: internal_coherence
+  - name: contrast
+    parameters:
+      min_background_ratio: 0.1
+  descriptors:
+  - name: row_cardinality
+  - name: column_cardinality
+  archive:
+    name: deep_grid_mome
+    parameters:
+      axes:
+      - descriptor: row_cardinality
+        binning: EXACT
+      - descriptor: column_cardinality
+        binning: EXACT
+      cell_capacity: 2
+  parent_selection:
+    name: repertoire_uniform
+  initialization:
+    name: uniform_random
+  emitters:
+  - name: random_move
+  scheduler:
+    name: first
+  termination:
+    name: evaluation_budget
+    parameters:
+      max_evaluations: 8
+execution:
+  executor:
+    name: serial
+monitoring:
+  observers:
+  - name: search_progress

@@ -1,0 +1,31 @@
+schema_version: 1
+identifier: example-salvi-benchmark
+cases:
+  - identifier: example
+    dataset_bundle: ../example-dataset
+    bicluster_set: ../smoke-output/artifacts/repertoire
+    algorithm:
+      algorithm: SALVI
+      version: 0.1.0
+      target_count_known: false
+      target_count_value: null
+      evaluation_budget: 128
+      wall_clock_budget_seconds: null
+      wall_time_seconds: null
+      cpu_time_seconds: null
+      peak_memory_bytes: null
+      postprocessing_policy: none
+      final_selection_policy: containment_marginal_quality
+output_directory: ../../experiment-results/accuracy-benchmark
+task:
+  included_patterns: [CONSTANT]
+uncertainty:
+  bootstrap_samples: 2000
+  confidence_level: 0.95
+  seed: 17
+coverage_thresholds: [0.25, 0.50, 0.75]
+execution:
+  workers: 1
+  allow_nested_parallelism: false
+  allow_cpu_oversubscription: false
+overwrite: true

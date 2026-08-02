@@ -1,0 +1,138 @@
+{
+  "environment": {
+    "implementation": "CPython",
+    "logical_cpu_count": 8,
+    "machine": "x86_64",
+    "platform": "Linux-5.4.0-216-generic-x86_64-with-glibc2.31",
+    "processor": "x86_64",
+    "python": "3.13.5"
+  },
+  "fixture": {
+    "columns": 12,
+    "generator": "tools/generate_release_fixture.py",
+    "identifier": "salvi-release-profile",
+    "rows": 240,
+    "seed": 20260724
+  },
+  "profiles": [
+    {
+      "configuration": "additive-serial.yaml",
+      "configuration_sha256": "37f4ef9491acc44e16e1fb5ce4d15123816a4ed3a1920fc20aa37432586f6518",
+      "median": {
+        "child_cpu_seconds": null,
+        "child_peak_rss_bytes": null,
+        "evaluations_per_second": 22.020328545367793,
+        "input_bytes": 21063,
+        "io_read_bytes": 0,
+        "io_write_bytes": 8740864,
+        "output_bytes": 2358404,
+        "peak_rss_bytes": 133894144,
+        "peak_traced_python_bytes": null,
+        "process_cpu_seconds": 2.7454479999999997,
+        "wall_seconds": 2.9064053185284138
+      },
+      "scientific_scope": {
+        "executor": "serial",
+        "objectives": [
+          "internal_coherence",
+          "contrast"
+        ],
+        "patterns": [
+          "ADDITIVE"
+        ],
+        "workers": 1
+      }
+    },
+    {
+      "configuration": "constant-serial.yaml",
+      "configuration_sha256": "bbfd5a8a81339846dc34a6048f03e17b2b52bd96457c9a712f7752db71528692",
+      "median": {
+        "child_cpu_seconds": null,
+        "child_peak_rss_bytes": null,
+        "evaluations_per_second": 77.51724673283637,
+        "input_bytes": 21063,
+        "io_read_bytes": 0,
+        "io_write_bytes": 7401472,
+        "output_bytes": 1584917,
+        "peak_rss_bytes": 137474048,
+        "peak_traced_python_bytes": null,
+        "process_cpu_seconds": 0.5198039999999999,
+        "wall_seconds": 0.8256227187812328
+      },
+      "scientific_scope": {
+        "executor": "serial",
+        "objectives": [
+          "internal_coherence",
+          "contrast"
+        ],
+        "patterns": [
+          "CONSTANT"
+        ],
+        "workers": 1
+      }
+    },
+    {
+      "configuration": "mixed-process-pool.yaml",
+      "configuration_sha256": "2c87d4f2ad67da0b6bef8e5d0482de1356e100ddc84f7333fc9d4062ef3644a6",
+      "median": {
+        "child_cpu_seconds": 10.901567,
+        "child_peak_rss_bytes": 143507456,
+        "evaluations_per_second": 11.6864754187294,
+        "input_bytes": 21063,
+        "io_read_bytes": 0,
+        "io_write_bytes": 7782400,
+        "output_bytes": 1775087,
+        "peak_rss_bytes": 144891904,
+        "peak_traced_python_bytes": null,
+        "process_cpu_seconds": 0.702947,
+        "wall_seconds": 5.476415917277336
+      },
+      "scientific_scope": {
+        "executor": "process_pool",
+        "objectives": [
+          "internal_coherence",
+          "contrast"
+        ],
+        "patterns": [
+          "CONSTANT",
+          "ADDITIVE",
+          "MULTIPLICATIVE"
+        ],
+        "workers": 4
+      }
+    },
+    {
+      "configuration": "mixed-serial.yaml",
+      "configuration_sha256": "695687b5015c1cb3c1b283a7d230836e755e3a544413adda874a379148ca5bbd",
+      "median": {
+        "child_cpu_seconds": null,
+        "child_peak_rss_bytes": null,
+        "evaluations_per_second": 6.732694573438088,
+        "input_bytes": 21063,
+        "io_read_bytes": 0,
+        "io_write_bytes": 7782400,
+        "output_bytes": 1774865,
+        "peak_rss_bytes": 140959744,
+        "peak_traced_python_bytes": null,
+        "process_cpu_seconds": 9.303028000000001,
+        "wall_seconds": 9.5058522708714
+      },
+      "scientific_scope": {
+        "executor": "serial",
+        "objectives": [
+          "internal_coherence",
+          "contrast"
+        ],
+        "patterns": [
+          "CONSTANT",
+          "ADDITIVE",
+          "MULTIPLICATIVE"
+        ],
+        "workers": 1
+      }
+    }
+  ],
+  "repetitions": 3,
+  "salvi_version": "0.1.0",
+  "schema_version": 1
+}

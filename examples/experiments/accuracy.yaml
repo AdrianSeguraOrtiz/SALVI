@@ -1,0 +1,25 @@
+schema_version: 1
+identifier: example-accuracy
+dataset_bundle: ../example-dataset
+bicluster_set: ../smoke-output/artifacts/repertoire
+output_directory: ../../experiment-results/accuracy
+task:
+  included_patterns: [CONSTANT]
+algorithm:
+  algorithm: SALVI
+  version: 0.1.0
+  target_count_known: false
+  target_count_value: null
+  evaluation_budget: 128
+  wall_clock_budget_seconds: null
+  wall_time_seconds: null
+  cpu_time_seconds: null
+  peak_memory_bytes: null
+  postprocessing_policy: none
+  final_selection_policy: containment_marginal_quality
+uncertainty:
+  bootstrap_samples: 2000
+  confidence_level: 0.95
+  seed: 17
+coverage_thresholds: [0.25, 0.50, 0.75]
+overwrite: true

@@ -1,0 +1,99 @@
+schema_version: 1
+patterns:
+  allowed: [ADDITIVE]
+  min_improvement: 0.10
+  max_iterations: 25
+  convergence_tolerance: 1.0e-6
+preprocessing:
+  source_column_filters: []
+  missing_values:
+    name: preserve
+    parameters: {}
+  column_augmentations: []
+  numeric_transformations:
+    - name: robust_numeric_scaling
+      parameters: {}
+evaluation:
+  candidate_validity:
+    name: minimum_cardinality
+    parameters: {min_rows: 2, min_columns: 2}
+  observed_support:
+    name: minimum_observed_support
+    parameters: {min_observed_count: 2, min_observed_ratio: 0.8}
+search:
+  engine:
+    name: serial_mome
+    parameters: {initial_population_size: 32, batch_size: 8}
+  objectives:
+    - name: internal_coherence
+      parameters: {}
+    - name: contrast
+      parameters: {min_background_ratio: 0.10}
+  descriptors:
+    - name: row_cardinality
+      parameters: {}
+    - name: column_cardinality
+      parameters: {}
+  archive:
+    name: deep_grid_mome
+    parameters:
+      axes:
+        - {descriptor: row_cardinality, binning: GEOMETRIC, bins: 8}
+        - {descriptor: column_cardinality, binning: EXACT}
+      cell_capacity: 8
+  parent_selection:
+    name: repertoire_uniform
+    parameters: {}
+  mate_selection:
+    name: repertoire_random
+    parameters: {}
+  crossover:
+    name: membership_recombination
+    parameters: {application_probability: 1.0, row_exchange_probability: 0.5, column_exchange_probability: 0.5}
+  initialization:
+    name: pattern_aware
+    parameters: {cardinality_levels: 8, joint_column_candidate_pool_size: 32}
+  emitters:
+    - name: add_row
+      parameters: {guided: true, parent_pool_size: 16}
+    - name: remove_row
+      parameters: {guided: true, parent_pool_size: 16}
+    - name: swap_row
+      parameters: {guided: true, parent_pool_size: 16}
+    - name: add_column
+      parameters: {guided: true, parent_pool_size: 16}
+    - name: remove_column
+      parameters: {guided: true, parent_pool_size: 16}
+    - name: swap_column
+      parameters: {guided: true, parent_pool_size: 16}
+    - name: shape_move
+      parameters: {guided: true, parent_pool_size: 16}
+    - name: crossover
+      parameters: {max_attempts: 8}
+    - name: restart
+      parameters:
+        {strategy: pattern_aware, cardinality_levels: 8, joint_column_candidate_pool_size: 32}
+  scheduler:
+    name: adaptive_credit
+    parameters: {exploration_weight: 0.5, new_cell_reward: 1.0, insertion_reward: 0.25}
+  termination:
+    name: evaluation_budget
+    parameters: {max_evaluations: 64}
+execution:
+  executor:
+    name: serial
+    parameters: {}
+  workers: 1
+  cancellation_grace_seconds: 5.0
+monitoring:
+  queue_capacity: 1024
+  checkpoint_interval_evaluations: 32
+  observers:
+    - name: search_progress
+      parameters: {}
+    - name: archive_coverage
+      parameters: {}
+    - name: runtime_throughput
+      parameters: {}
+    - name: resource_usage
+      parameters: {every_evaluations: 16}
