@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv sync --all-packages --all-extras --dev --locked
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy
+      - run: uv run pytest --cov --cov-report=xml
+      - run: uv run python tools/check_release_versions.py
+      - run: uv run python tools/verify_reproducible_builds.py
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: packages/salvi/web-ui/package-lock.json
+      - run: uv sync --all-packages --all-extras --dev --locked
+      - run: npm ci
+        working-directory: packages/salvi/web-ui
+      - run: npm run typecheck
+        working-directory: packages/salvi/web-ui
+      - run: npm run lint
+        working-directory: packages/salvi/web-ui
+      - run: npm test
+        working-directory: packages/salvi/web-ui
+      - run: npm run build
+        working-directory: packages/salvi/web-ui
+      - run: git diff --exit-code -- packages/salvi/src/salvi/web/static
+      - run: npx playwright install --with-deps chromium
+        working-directory: packages/salvi/web-ui
+      - run: |
+          uv run salvi gui --no-open --data-directory "$RUNNER_TEMP/salvi-web" &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:8765/api/v1/health && break
+            sleep 1
+          done
+          cd packages/salvi/web-ui
+          npm run test:e2e
+
+  distributions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - run: uv build --all-packages --out-dir dist --clear --no-create-gitignore
+      - run: uvx twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  smoke:
+    needs: distributions
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist
+      - run: python tools/install_release_wheels.py dist
+      - run: python examples/create-example-dataset.py
+      - run: salvi --version
+      - run: salvi schemas
+      - run: salvi validate examples/smoke-configuration.yaml --dataset examples/example-dataset
+      - run: salvi inspect examples/smoke-configuration.yaml --dataset examples/example-dataset
+      - run: salvi run examples/smoke-configuration.yaml --dataset examples/example-dataset --output examples/smoke-output --progress never
+      - run: salvi-exp schemas
+      - run: salvi-exp --help
