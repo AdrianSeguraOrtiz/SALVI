@@ -1,4 +1,4 @@
-"""Verify that publishable package versions and internal pins remain synchronized."""
+"""Verify that the publishable SALVI version matches an optional release tag."""
 
 from __future__ import annotations
 
@@ -19,26 +19,18 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=root)
     parser.add_argument("--tag")
     arguments = parser.parse_args()
-    core = _project(arguments.root / "packages" / "salvi" / "pyproject.toml")
-    experiments = _project(arguments.root / "packages" / "salvi-experiments" / "pyproject.toml")
-    core_version = str(core["version"])
-    experiments_version = str(experiments["version"])
-    if core_version != experiments_version:
-        raise SystemExit(
-            f"package versions differ: salvi={core_version}, "
-            f"salvi-experiments={experiments_version}"
-        )
-    dependencies = tuple(str(value) for value in experiments["dependencies"])
-    expected_pin = f"salvi=={core_version}"
-    if expected_pin not in dependencies:
-        raise SystemExit(f"salvi-experiments must depend on {expected_pin}")
+    project = _project(arguments.root / "pyproject.toml")
+    project_name = str(project["name"])
+    if project_name != "salvi":
+        raise SystemExit(f"expected the root distribution to be 'salvi', found {project_name!r}")
+    project_version = str(project["version"])
     if arguments.tag is not None:
         match = re.fullmatch(r"v(.+)", arguments.tag)
-        if match is None or match.group(1) != core_version:
+        if match is None or match.group(1) != project_version:
             raise SystemExit(
-                f"release tag {arguments.tag!r} does not match package version {core_version}"
+                f"release tag {arguments.tag!r} does not match package version {project_version}"
             )
-    print(core_version)
+    print(project_version)
     return 0
 
 

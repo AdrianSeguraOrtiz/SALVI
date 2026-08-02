@@ -416,8 +416,8 @@ cell-coverage initializer instead derives its bootstrap demand from reachable
 archive cells, `seeds_per_cell`, and `max_attempts_per_cell`; it deliberately
 does not interpret one candidate as a population member assigned to each cell.
 
-`pymoo_nsga2` is an experimental conventional multiobjective engine provided by
-the optional `evolution` installation extra. It uses one binary variable per row
+`pymoo_nsga2` is an experimental conventional multiobjective engine backed by
+the bundled pymoo runtime. It uses one binary variable per row
 and prepared column, repairs offspring to the configured minimum cardinalities,
 and delegates NSGA-II selection, variation and survival to pymoo. Its engine
 parameters are:
@@ -723,7 +723,7 @@ patterns and accepts `--overwrite` only when replacement is intentional.
 
 ## Experiment manifests
 
-Experiment manifests live in the separate `salvi-experiments` package. Each
+Experiment manifests are owned by the `salvi_experiments` namespace. Each
 dataset or benchmark case references a reusable pipeline YAML and a DatasetBundle.
 Manifests may group pipelines, but they cannot patch scientific components or
 inject implicit variables. Dataset, output, identifier, and seed are explicit

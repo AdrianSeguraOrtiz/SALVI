@@ -236,9 +236,7 @@ class UciRepositoryClient:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         self.cache_directory = (
-            (cache_directory or Path.home() / ".cache" / "salvi-experiments" / "uci")
-            .expanduser()
-            .resolve()
+            (cache_directory or Path.home() / ".cache" / "salvi" / "uci").expanduser().resolve()
         )
         self.timeout_seconds = timeout_seconds
 

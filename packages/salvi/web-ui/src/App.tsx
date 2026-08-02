@@ -687,7 +687,7 @@ export function App() {
                 })
               ) : (
                 <p className="empty-note">
-                  Install salvi-experiments to enable scientific result analyses.
+                  The scientific analysis provider is unavailable in this installation.
                 </p>
               )}
             </div>

@@ -39,7 +39,7 @@ def launch_web_gui(
         from salvi.web.app import create_app
     except ModuleNotFoundError as error:
         raise OptionalDependencyError(
-            "the web GUI requires optional dependencies; install 'salvi[gui]'"
+            "the web GUI dependencies are unavailable; reinstall the complete 'salvi' package"
         ) from error
 
     app = create_app(

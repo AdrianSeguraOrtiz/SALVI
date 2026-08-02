@@ -1,139 +1,237 @@
 # SALVI
 
-SALVI is a Python 3.11+ framework for quality-diversity biclustering of
-heterogeneous data. It is organized around explicit components for data
-preparation, pattern inference, objective evaluation, candidate generation,
-archives, observers, final selection, interoperability and experimentation.
+SALVI is a component-oriented framework for biclustering heterogeneous data with
+quality-diversity optimization. It searches for coherent and contrasting
+submatrices while using row and column cardinality as behavioral descriptors,
+so biclusters of different shapes can be explored without competing in one
+global Pareto population.
 
-The current implementation is executable end to end. It loads canonical
-DatasetBundles, preprocesses heterogeneous columns without imputing missing
-values by default, evaluates constant, additive, multiplicative and mixed
-column-pattern hypotheses, and stores per-column explanations for every reported
-bicluster. Internal coherence, contrast and balanced bicluster size are available
-as objectives. Optional constraints can bound balanced size or internal-coherence
-error. Pattern inference is shared across objectives and constraints so each
-candidate is fit once per evaluation.
+The same component catalog drives the Python API, CLI, and local web interface.
+SALVI supports numerical, categorical, and boolean columns; constant, additive,
+and multiplicative patterns; missing values without mandatory imputation;
+parallel evaluation; durable SQLite monitoring; canonical Parquet artifacts;
+and per-column explanations for every reported bicluster. The installation also
+includes the `salvi_experiments` Python namespace and the `salvi-exp` command for
+objective-alignment, accuracy, benchmark, clinical, and interoperability tasks.
 
-The search layer provides a bounded MOME-style quality-diversity engine. Row and
-column cardinalities are behavioral descriptors, archive axes own their own
-discretization, and each occupied cell keeps a bounded local Pareto front.
-Initializers, emitters, schedulers, termination criteria, executors and observers
-are selected through the same component registry used by the CLI and GUI.
-An optional `pymoo` backend also exposes conventional NSGA-II using the same
-SALVI objectives, constraints, initialization and evaluation contracts.
-
-Runs can execute serially, with a thread pool, or with a persistent process pool.
-Checkpoints capture archives, pending work, scheduler state and random streams.
-Passive SQLite observers record progress, coverage,
-diversity, throughput and resource usage. Omitting final selection reports the search
-repertoire directly. When a selector is configured, SALVI persists both the
-unfiltered `search-repertoire` and the selected `repertoire`, so search coverage
-and reporting quality can be audited independently.
-
-The sibling `salvi-experiments` package contains scientific protocols that use
-only public SALVI artifacts: objective alignment against ground truth, accuracy
-assessment, clinical association and stability analysis, benchmark aggregation,
-and comparison reports. GBIC, HBIC and UCI adapters convert external data and
-results into SALVI's canonical formats.
-
-## Development setup
-
-SALVI requires Python 3.11 or newer and uses a versioned `uv` workspace.
+SALVI requires Python 3.11 or newer. Until a PyPI release is available, install
+the complete distribution directly from GitHub:
 
 ```bash
-uv sync --all-packages --all-extras --dev
-uv run pytest
-uv run ruff check .
-uv run mypy packages/salvi/src packages/salvi-experiments/src
+python -m pip install \
+  "git+https://github.com/AdrianSeguraOrtiz/SALVI.git@<commit-sha>"
 ```
 
-For a local command-line installation from the repository root:
+Using a commit SHA makes the installation reproducible. Replace
+`<commit-sha>` with `main` to track the latest development revision. A source
+checkout can be installed for development with:
 
 ```bash
-python -m pip install "packages/salvi[gui,evolution]"
-python -m pip install packages/salvi-experiments
-salvi --help
-salvi-exp --help
+git clone https://github.com/AdrianSeguraOrtiz/SALVI.git
+cd SALVI
+python -m pip install -e ".[dev]"
 ```
 
-Install only the core and the optional conventional evolutionary backend with:
+## Programmatic API
+
+`SalviRun.builder(...)` composes concrete component instances. Unique roles use
+`with_*`; repeatable roles use `add_*`. `build()` validates role cardinalities,
+capabilities, scientific requirements, and incompatibilities before search
+starts.
+
+The following compact example builds and executes a QD pipeline in memory:
+
+```python
+from pathlib import Path
+
+from salvi import (
+    DatasetBundleReader,
+    PatternConfiguration,
+    PatternKind,
+    SalviRun,
+    execute_in_memory,
+)
+from salvi.components.candidate_initialization import UniformRandomInitializer
+from salvi.components.descriptors import ColumnCardinality, RowCardinality
+from salvi.components.evaluation_policies import MinimumCardinality, MinimumObservedSupport
+from salvi.components.execution import SerialEvaluationExecutor
+from salvi.components.membership_emitters import RandomMoveEmitter
+from salvi.components.objectives import Contrast, InternalCoherence
+from salvi.components.parent_selection import RepertoireUniformParentSelection
+from salvi.components.preprocessing import PreserveMissingValues, RobustNumericScaling
+from salvi.components.schedulers import FirstEmitterScheduler
+from salvi.components.termination import EvaluationBudget
+from salvi.engine.archive import DeepGridMomeArchive, DeepGridMomeConfiguration
+from salvi.engine.mome import SerialMomeSearchEngine
+
+dataset = DatasetBundleReader().read(Path("dataset-bundle"))
+archive = DeepGridMomeConfiguration()
+
+specification = (
+    SalviRun.builder(
+        dataset,
+        run_identifier="example",
+        seed=42,
+        patterns=PatternConfiguration(allowed=(PatternKind.CONSTANT,)),
+    )
+    .with_missing_values_policy(PreserveMissingValues())
+    .add_numeric_transformation(RobustNumericScaling())
+    .with_candidate_validity_policy(MinimumCardinality(min_rows=2, min_columns=2))
+    .with_evaluation_support_policy(MinimumObservedSupport())
+    .with_search_engine(SerialMomeSearchEngine())
+    .add_objective(InternalCoherence())
+    .add_objective(Contrast())
+    .add_descriptor(RowCardinality())
+    .add_descriptor(ColumnCardinality())
+    .with_archive(DeepGridMomeArchive(axes=archive.axes, cell_capacity=archive.cell_capacity))
+    .with_parent_selection_policy(RepertoireUniformParentSelection())
+    .with_initializer(UniformRandomInitializer())
+    .add_emitter(RandomMoveEmitter())
+    .with_scheduler(FirstEmitterScheduler())
+    .with_executor(SerialEvaluationExecutor())
+    .with_termination(EvaluationBudget(max_evaluations=5_000))
+    .build()
+)
+
+result = execute_in_memory(specification)
+print(result.evaluations, len(result.repertoire.evaluations))
+```
+
+`execute_in_memory` is intended for direct scripting and returns both the raw
+search repertoire and the final repertoire. It does not create SQLite events,
+checkpoints, or files. Use `RunService` or the CLI for durable, observable runs.
+
+## CLI
+
+SALVI pipeline YAML is reusable: it describes scientific and search components,
+while the dataset, output directory, run identifier, and seed are supplied when
+launching a run. A minimal configuration is available at
+[`examples/smoke-configuration.yaml`](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/examples/smoke-configuration.yaml), and
+the current full QD pipeline is at
+[`examples/scientific-configuration.yaml`](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/examples/scientific-configuration.yaml).
+
+```yaml
+schema_version: 1
+patterns:
+  allowed: [CONSTANT]
+preprocessing:
+  missing_values: {name: preserve}
+  numeric_transformations:
+    - {name: robust_numeric_scaling}
+evaluation:
+  candidate_validity:
+    name: minimum_cardinality
+    parameters: {min_rows: 2, min_columns: 2}
+  observed_support: {name: minimum_observed_support}
+search:
+  engine: {name: serial_mome}
+  objectives:
+    - {name: internal_coherence}
+    - {name: contrast}
+  descriptors:
+    - {name: row_cardinality}
+    - {name: column_cardinality}
+  archive: {name: deep_grid_mome}
+  parent_selection: {name: repertoire_uniform}
+  initialization: {name: uniform_random}
+  emitters:
+    - {name: random_move}
+  scheduler: {name: first}
+  termination:
+    name: evaluation_budget
+    parameters: {max_evaluations: 5000}
+execution:
+  executor: {name: serial}
+monitoring:
+  observers:
+    - {name: search_progress}
+```
+
+Validate, inspect, and execute it against a canonical `DatasetBundle`:
 
 ```bash
-python -m pip install "packages/salvi[evolution]"
+salvi validate pipeline.yaml --dataset dataset-bundle
+salvi inspect pipeline.yaml --dataset dataset-bundle
+salvi run pipeline.yaml \
+  --dataset dataset-bundle \
+  --output run-output \
+  --identifier experiment-01 \
+  --seed 42
 ```
 
-The repository root is an orchestration-only uv workspace and deliberately does
-not build a third distribution. `salvi` and `salvi-experiments` remain independently
-installable packages. Workspace development should use
-`uv sync --all-packages --all-extras --dev`.
+The main CLI also provides:
 
-Create a small canonical dataset, inspect the concrete pipeline, and run a short
-scientific smoke search:
+```text
+salvi components [--kind KIND] [--format text|json|markdown]
+salvi config format PIPELINE.yaml [--output NORMALIZED.yaml]
+salvi select PIPELINE.yaml --dataset DATASET --repertoire INPUT --output OUTPUT
+salvi profile PIPELINE.yaml REPORT --dataset DATASET --output RUN_OUTPUT
+salvi schemas
+salvi gui
+```
+
+`salvi run` writes the effective configuration, metadata, checkpoints, canonical
+bicluster artifacts, and `run.sqlite` under the output directory. It reports
+concise live progress on `stderr`; `--progress always|never|auto`, `--quiet`, and
+`--monitor-interval` control that view.
+
+The same installation exposes the complete experiment and interoperability CLI:
 
 ```bash
-uv run python examples/create-example-dataset.py
-uv run salvi validate examples/smoke-configuration.yaml \
-  --dataset examples/example-dataset
-uv run salvi inspect examples/smoke-configuration.yaml \
-  --dataset examples/example-dataset
-uv run salvi run examples/smoke-configuration.yaml \
-  --dataset examples/example-dataset --output examples/smoke-output \
-  --identifier example-run --seed 42
-uv run salvi components --kind search_engine
-uv run salvi config format examples/smoke-configuration.yaml
-uv run salvi schemas
-uv run salvi-exp schemas
+salvi-exp schemas
+salvi-exp convert gbic /path/to/GBIC-data /path/to/DatasetBundles
+salvi-exp convert uci uci-import.yaml clinical-dataset
+salvi-exp convert hbic hbic-result.json bicluster-set --dataset-bundle dataset-bundle
+salvi-exp export csv bicluster-set csv-output
+salvi-exp dataset objective-alignment objective-alignment.yaml
+salvi-exp dataset accuracy accuracy.yaml
+salvi-exp dataset clinical-validation clinical-validation.yaml
+salvi-exp benchmark objective-alignment objective-alignment-benchmark.yaml
+salvi-exp benchmark accuracy accuracy-benchmark.yaml
+salvi-exp benchmark ablation ablation.yaml
+salvi-exp benchmark compare comparison.yaml
 ```
 
-`salvi run` reports concise live progress from `run.sqlite` to `stderr` when
-executed in an interactive terminal. The final machine-readable JSON summary is
-kept on `stdout`. Use `--progress always`, `--progress never`, `--quiet`, or
-`--monitor-interval 1.0` to control console monitoring.
+Run `salvi --help`, `salvi <command> --help`, or `salvi-exp --help` for the full
+interface.
 
-`salvi select` applies the pipeline's final-selector component to an existing
-search repertoire. This makes selector ablations independent from the
-expensive candidate search while preserving a canonical `BiclusterSet` and its
-source-run/checkpoint provenance.
+## GUI
 
-The optional local web application is installed through the `gui` extra and
-launched with `uv run salvi gui`. It provides a catalog-driven workflow builder,
-SQLite-backed live monitoring and on-demand result inspection at
-`http://127.0.0.1:8765`. It needs neither Qt nor a graphical session; on a remote
-machine, forward port `8765` through VS Code or SSH. See
-[docs/gui.md](docs/gui.md).
-
-External HBIC results and human-readable CSV exports use explicit adapters:
+Launch the local web application with the same installation:
 
 ```bash
-uv run salvi-exp convert gbic /path/to/gbic /path/to/dataset-bundles
-uv run salvi-exp convert uci uci-import.yaml clinical-dataset
-uv run salvi-exp convert hbic hbic-results.json hbic-biclusters \
-  --dataset-bundle example-dataset
-uv run salvi-exp export csv hbic-biclusters hbic-csv
+salvi gui
 ```
 
-Scientific protocols are provided by the sibling package:
+SALVI opens `http://127.0.0.1:8765`. Use `salvi gui --no-open` on a headless or
+remote machine, then forward port `8765` through VS Code Remote SSH or SSH. The
+server is loopback-only because this single-user version has no authentication.
 
-```bash
-uv run salvi-exp dataset objective-alignment \
-  examples/experiments/objective-alignment.yaml
-uv run salvi-exp dataset accuracy examples/experiments/accuracy.yaml
-uv run salvi-exp dataset clinical-validation clinical-validation.yaml
-uv run salvi-exp benchmark accuracy \
-  examples/experiments/accuracy-benchmark.yaml
-uv run salvi-exp benchmark compare examples/experiments/comparison.yaml
-uv run salvi-exp benchmark ablation examples/experiments/ablation.yaml
-```
+The **Build** view constructs a reusable YAML pipeline directly from catalog
+metadata and compatibility rules:
+
+![SALVI Build view](https://raw.githubusercontent.com/AdrianSeguraOrtiz/SALVI/main/docs/images/salvi-build.png)
+
+The **Monitor** view reads durable SQLite events and renders only the observers
+selected in the pipeline:
+
+![SALVI Monitor view](https://raw.githubusercontent.com/AdrianSeguraOrtiz/SALVI/main/docs/images/salvi-monitor.png)
+
+The **Results** view compares the raw repertoire with final selection and exposes
+matrix values, structure, objectives, patterns, provenance, and per-column
+contributions:
+
+![SALVI Results view](https://raw.githubusercontent.com/AdrianSeguraOrtiz/SALVI/main/docs/images/salvi-results.png)
 
 ## Documentation
 
-- [Architecture](docs/architecture.md)
-- [Configuration](docs/configuration.md)
-- [Artifact contracts](docs/artifact-contracts.md)
-- [Local web application](docs/gui.md)
-- [Scientific experiments](docs/experiments.md)
-- [Scientific contract](docs/scientific-contract.md)
-- [Performance profiling](docs/performance.md)
-- [Versioning and release](docs/versioning-and-release.md)
+- [Architecture](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/docs/architecture.md)
+- [Configuration reference](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/docs/configuration.md)
+- [Artifact contracts](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/docs/artifact-contracts.md)
+- [Local web application](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/docs/gui.md)
+- [Scientific experiments](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/docs/experiments.md)
+- [Scientific contract](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/docs/scientific-contract.md)
+- [Performance](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/docs/performance.md)
+- [Versioning and release](https://github.com/AdrianSeguraOrtiz/SALVI/blob/main/docs/versioning-and-release.md)
 
 SALVI is licensed under the MIT License.

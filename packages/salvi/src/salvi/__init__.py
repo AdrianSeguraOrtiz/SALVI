@@ -1,6 +1,7 @@
 """Public API for the SALVI biclustering framework."""
 
 from salvi.api.evaluation import ScientificEvaluationBatch, ScientificEvaluationService
+from salvi.api.execution import InMemoryRunResult, execute_in_memory
 from salvi.api.run import SalviRun
 from salvi.application.configuration import (
     PipelineConfiguration,
@@ -67,6 +68,7 @@ __all__ = [
     "GroundTruth",
     "GroundTruthBicluster",
     "GroundTruthColumnPattern",
+    "InMemoryRunResult",
     "ObjectiveDirection",
     "ObjectiveValue",
     "PatternConfiguration",
@@ -87,6 +89,7 @@ __all__ = [
     "SearchFamily",
     "__version__",
     "bind_pipeline",
+    "execute_in_memory",
     "jaccard_distance",
     "load_configuration",
     "load_pipeline_configuration",

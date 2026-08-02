@@ -15,11 +15,13 @@ search or creating run artifacts.
 
 ## Package boundaries
 
-`salvi` contains domain models, component contracts, composition, execution,
-canonical artifacts, CLI, and the optional GUI. `salvi-experiments` is a sibling
-package that may depend on the public `salvi` API. It owns scientific experiment
-protocols and external interoperability adapters such as GBIC and HBIC. The
-reverse dependency is forbidden.
+The `salvi` import namespace contains domain models, component contracts,
+composition, execution, canonical artifacts, CLI, and GUI. The
+`salvi_experiments` namespace owns scientific experiment protocols and external
+interoperability adapters such as GBIC and HBIC. Both namespaces ship in one
+distribution, while their code-level dependency remains one-way:
+`salvi_experiments` may use the public `salvi` API and the reverse dependency is
+forbidden.
 
 The core is arranged around these boundaries:
 
@@ -76,10 +78,12 @@ location aligned without turning every helper into a configurable component.
 
 ## Execution and observation
 
-`RunService` is the only execution gateway. It owns configuration and artifact
-I/O, applies the missing-values policy and ordered preprocessing pipeline exactly
-once, drives the engine protocol, persists events, and coordinates cancellation.
-Execution follows:
+`RunService` is the durable execution gateway used by the CLI and GUI. It owns
+configuration and artifact I/O, applies the missing-values policy and ordered
+preprocessing pipeline exactly once, drives the engine protocol, persists events,
+and coordinates cancellation. `execute_in_memory` exposes the same composition
+and scientific lifecycle to Python scripts while deliberately omitting events,
+checkpoints, and artifact persistence. Durable execution follows:
 
 ```text
 configuration
@@ -112,9 +116,9 @@ uploads, execution, events and artifacts through versioned endpoints. Its React
 client builds the same reusable YAML accepted by the CLI. Scientific execution
 occurs in a spawned child process. Live charts and event history consume only the
 SQLite event-source contract, while final inspection uses a paged canonical
-BiclusterSet reader and bounded source-matrix fragments. Optional input adapters
-and post-run analyses are discovered from installed providers, preserving the
-one-way dependency from `salvi-experiments` to `salvi`.
+BiclusterSet reader and bounded source-matrix fragments. Input adapters and
+post-run analyses are discovered through provider entry points, preserving the
+one-way dependency from `salvi_experiments` to `salvi`.
 
 ## Scientific lifecycle
 
@@ -185,7 +189,7 @@ deterministic random-stream and scheduler states, counters, integration mode, an
 a scientific configuration fingerprint. Resuming a pending checkpoint replays
 the candidates without invoking initialization, emitters or scheduling again.
 
-`PymooNsga2SearchEngine` is an optional conventional multiobjective control behind
+`PymooNsga2SearchEngine` is a conventional multiobjective control behind
 the same `SearchEngine` protocol. It translates SALVI biclusters to binary
 row/column membership vectors and delegates NSGA-II selection, variation and
 survival to pymoo. SALVI still owns initialization,

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from salvi.api import SalviRun
+from salvi.api import SalviRun, execute_in_memory
 from salvi.application.configuration import ComponentSpec
 from salvi.application.factory import build_specification, prepare_run
 from salvi.components.candidate_initialization import UniformRandomInitializer
@@ -556,6 +556,17 @@ def test_configuration_factory_builds_complete_specification(configuration_path:
     assert len(specification.descriptors) == 2
     assert len(specification.emitters) == 1
     assert len(specification.observers) == 1
+
+
+def test_programmatic_specification_executes_in_memory(configuration_path: Path) -> None:
+    from salvi.application.configuration import load_configuration
+
+    configuration = load_configuration(configuration_path).configuration
+    result = execute_in_memory(build_specification(configuration))
+
+    assert result.evaluations == 2
+    assert result.search_repertoire == result.repertoire
+    assert result.repertoire.evaluations
 
 
 def test_scientific_objectives_reject_missing_robust_numeric_scaling(

@@ -176,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--overwrite", action="store_true")
     profile.add_argument("--lightweight", action="store_true")
 
-    gui = subparsers.add_parser("gui", help="launch the optional local web interface")
+    gui = subparsers.add_parser("gui", help="launch the local web interface")
     gui.add_argument("--host", default="127.0.0.1")
     gui.add_argument("--port", type=_tcp_port, default=8765)
     gui.add_argument("--no-open", action="store_true")

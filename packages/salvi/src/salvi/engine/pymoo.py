@@ -105,8 +105,7 @@ def _load_pymoo() -> _PymooApi:
         termination_module = importlib.import_module("pymoo.core.termination")
     except ModuleNotFoundError as error:
         raise ComponentError(
-            "pymoo_nsga2 requires the optional evolutionary backend; "
-            "install SALVI with the 'evolution' extra"
+            "pymoo_nsga2 cannot import its pymoo runtime; reinstall the complete 'salvi' package"
         ) from error
     return _PymooApi(
         nsga2=nsga2_module.NSGA2,

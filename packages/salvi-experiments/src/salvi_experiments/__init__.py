@@ -12,6 +12,7 @@ from salvi_experiments.configuration import (
     AblationDatasetSelection,
     AblationExecutionConfiguration,
     AblationMetricsConfiguration,
+    AblationPairwiseComparison,
     AblationPipeline,
     AblationSelector,
     AccuracyBenchmarkConfiguration,
@@ -28,7 +29,9 @@ from salvi_experiments.dataset import (
     ClinicalValidationConfiguration,
     RepertoireReference,
     StabilityConfiguration,
+    adjust_clinical_association_fdr,
     calculate_clinical_associations,
+    calculate_reference_bicluster_stability,
     calculate_repertoire_stability,
     characterize_biclusters,
     run_accuracy,
@@ -68,7 +71,7 @@ from salvi_experiments.metrics import (
 )
 
 try:
-    __version__ = version("salvi-experiments")
+    __version__ = version("salvi")
 except PackageNotFoundError:  # pragma: no cover - source tree without installation
     __version__ = "0.0.0+uninstalled"
 
@@ -76,6 +79,7 @@ __all__ = [
     "AblationDatasetSelection",
     "AblationExecutionConfiguration",
     "AblationMetricsConfiguration",
+    "AblationPairwiseComparison",
     "AblationPipeline",
     "AblationSelector",
     "AccuracyBenchmarkConfiguration",
@@ -114,8 +118,10 @@ __all__ = [
     "UciRepositoryClient",
     "UciRoleDefaults",
     "__version__",
+    "adjust_clinical_association_fdr",
     "calculate_accuracy",
     "calculate_clinical_associations",
+    "calculate_reference_bicluster_stability",
     "calculate_repertoire_stability",
     "characterize_biclusters",
     "load_experiment_configuration",

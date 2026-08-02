@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-visible changes are documented here. SALVI follows semantic
-versioning for its Python distributions and independent integer versions for
+versioning for its Python distribution and independent integer versions for
 artifact schemas.
 
 ## 0.1.0 - Unreleased
@@ -21,3 +21,6 @@ artifact schemas.
 - Added versioned runtime profiling, reproducible distribution checks and
   clean-wheel installation smokes for Python 3.11-3.13 on Linux, Windows and
   macOS.
+- Consolidated the core, GUI, conventional evolutionary backend, interoperability,
+  and experiment protocols into one installable `salvi` distribution, and added
+  direct in-memory execution for fluent programmatic compositions.

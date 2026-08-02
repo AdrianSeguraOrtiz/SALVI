@@ -1,10 +1,10 @@
 # Versioning and release policy
 
-SALVI publishes two Python distributions with the same semantic version:
-`salvi` and `salvi-experiments`. The experiment package pins the corresponding
-core version because scientific reports depend on exact objective and artifact
-semantics. Development status, package versions and user-visible changes are
-recorded in `CHANGELOG.md`.
+SALVI publishes one Python distribution, `salvi`, with one semantic version. It
+contains both the `salvi` core namespace and the `salvi_experiments` scientific
+protocol namespace, ensuring that objective, artifact, and experiment semantics
+are installed as one reproducible unit. Development status, package version, and
+user-visible changes are recorded in `CHANGELOG.md`.
 
 ## Public schemas
 
@@ -48,7 +48,7 @@ Tests verify that these values agree with the runtime Pydantic models.
 - Checkpoints are intentionally stricter than result artifacts. A checkpoint is
   resumable only when its schema and scientific configuration fingerprint match.
 - Experimental CSV files are presentation exports, not migration inputs.
-- External formats enter through `salvi-experiments` adapters such as `gbic` and
+- External formats enter through `salvi_experiments` adapters such as `gbic` and
   `hbic`; converters do not manufacture missing objective values or pattern
   diagnostics.
 
@@ -58,14 +58,14 @@ fixture before its release.
 
 ## Release procedure
 
-1. Update both package versions, their internal dependency pin and the changelog.
+1. Update the root package version and the changelog.
 2. Run `python tools/check_release_versions.py`.
 3. Run the complete quality suite and all clean-install smokes.
 4. Run `python tools/verify_reproducible_builds.py`.
 5. Regenerate the performance baseline described in `docs/performance.md`.
 6. Tag the exact commit as `v<version>`.
 
-The tag workflow validates that the tag matches both packages, rebuilds and
-checks wheel and source distributions, and stores them as a GitHub Actions
+The tag workflow validates that the tag matches the package, rebuilds and checks
+the wheel and source distribution, and stores them as a GitHub Actions
 artifact. It deliberately does not publish to PyPI automatically. Publication
 requires a separately authorized action after the artifacts have been inspected.

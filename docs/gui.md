@@ -1,6 +1,6 @@
 # Local web application
 
-SALVI's optional web application is a presentation layer over the same component
+SALVI's local web application is a presentation layer over the same component
 catalog, pipeline configuration, `RunService`, SQLite events and canonical
 artifacts used by the Python API and CLI. React does not implement scientific
 validation or search behavior.
@@ -8,7 +8,7 @@ validation or search behavior.
 Install and start it with:
 
 ```bash
-python -m pip install "salvi[gui]"
+python -m pip install salvi
 salvi gui
 ```
 
@@ -74,9 +74,8 @@ The input boundary accepts:
 
 - a canonical DatasetBundle ZIP;
 - CSV or TSV, followed by explicit confirmation of inferred semantic types;
-- G-Bic data when the optional `salvi-experiments` provider is installed;
-- an official UCI dataset ID, optionally accompanied by an import recipe, when
-  the same provider is installed.
+- G-Bic data through the bundled `salvi_experiments` provider;
+- an official UCI dataset ID, optionally accompanied by an import recipe.
 
 G-Bic ground truth is optional. It is attached to the canonical dataset only for
 post-run analysis and is never included in `RunContext`, pattern selection or
@@ -111,8 +110,8 @@ visible page. The inspector shows structure, source values, missingness,
 objectives, constraints, descriptors, provenance, inferred patterns, support,
 parameters, diagnostics and per-column objective contributions.
 
-When ground truth is attached and `salvi-experiments` is installed, REC, REL and
-BE can be calculated independently for the raw repertoire and selected result.
+When ground truth is attached, REC, REL and BE can be calculated independently
+for the raw repertoire and selected result.
 
 ## Storage and privacy
 

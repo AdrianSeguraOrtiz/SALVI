@@ -35,7 +35,7 @@ run. Experiment adapters must request it explicitly through
 
 ## ClinicalDatasetBundle version 1
 
-`salvi-experiments` wraps a search-only `DatasetBundle` with clinical
+The `salvi_experiments` namespace wraps a search-only `DatasetBundle` with clinical
 annotations that must never reach `RunContext`:
 
 ```text

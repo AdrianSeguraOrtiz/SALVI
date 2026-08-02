@@ -1,12 +1,12 @@
-"""Build every publishable package twice and compare distribution bytes."""
+"""Build the SALVI distribution twice and compare distribution bytes."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import os
-import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -19,18 +19,16 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _build(root: Path, destination: Path, uv: str, epoch: str) -> dict[str, str]:
+def _build(root: Path, destination: Path, python: str, epoch: str) -> dict[str, str]:
     environment = os.environ.copy()
     environment["SOURCE_DATE_EPOCH"] = epoch
     subprocess.run(
         [
-            uv,
+            python,
+            "-m",
             "build",
-            "--all-packages",
-            "--out-dir",
+            "--outdir",
             str(destination),
-            "--clear",
-            "--no-create-gitignore",
         ],
         cwd=root,
         env=environment,
@@ -46,23 +44,20 @@ def _build(root: Path, destination: Path, uv: str, epoch: str) -> dict[str, str]
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--uv", default=shutil.which("uv"))
+    parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--source-date-epoch", default="1704067200")
     arguments = parser.parse_args()
-    if arguments.uv is None:
-        parser.error("uv is required")
-
     with tempfile.TemporaryDirectory(prefix="salvi-reproducible-build-") as temporary:
         first = _build(
             arguments.root.resolve(),
             Path(temporary) / "first",
-            arguments.uv,
+            arguments.python,
             arguments.source_date_epoch,
         )
         second = _build(
             arguments.root.resolve(),
             Path(temporary) / "second",
-            arguments.uv,
+            arguments.python,
             arguments.source_date_epoch,
         )
     if first != second:

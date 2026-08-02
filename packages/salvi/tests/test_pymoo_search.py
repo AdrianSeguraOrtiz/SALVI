@@ -111,19 +111,19 @@ def _scientific_state(result: object) -> tuple[tuple[object, ...], ...]:
     )
 
 
-def test_pymoo_nsga2_is_described_as_an_optional_non_resumable_engine() -> None:
+def test_pymoo_nsga2_is_described_as_a_bundled_non_resumable_engine() -> None:
     registration = default_component_registry().get(
         ComponentKind.SEARCH_ENGINE,
         "pymoo_nsga2",
     )
 
     assert registration.provides == frozenset({"search-engine", "search-result"})
-    assert any("evolution" in note for note in registration.compatibility_notes)
+    assert any("bundled" in note for note in registration.compatibility_notes)
     assert any("resumption" in note for note in registration.compatibility_notes)
     assert any("forbidden" in note for note in registration.compatibility_notes)
 
 
-def test_pymoo_nsga2_reports_a_missing_optional_dependency(
+def test_pymoo_nsga2_reports_a_missing_runtime_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def missing_module(name: str) -> object:
@@ -131,7 +131,7 @@ def test_pymoo_nsga2_reports_a_missing_optional_dependency(
 
     monkeypatch.setattr(pymoo_module.importlib, "import_module", missing_module)
 
-    with pytest.raises(ComponentError, match="evolution"):
+    with pytest.raises(ComponentError, match="pymoo runtime"):
         pymoo_module._load_pymoo()
 
 
@@ -143,7 +143,7 @@ def test_search_engine_package_exposes_all_lazy_engine_types() -> None:
         engine_package.__getattr__("unknown_engine")
 
 
-@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the optional evolution extra")
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the pymoo runtime")
 def test_pymoo_operator_adaptation_uses_a_lazy_component_specification() -> None:
     operator = pymoo_module._build_backend_operator(_ExternalPymooOperator())
 
@@ -228,7 +228,7 @@ def test_pymoo_nsga2_rejects_qd_emitters_and_scheduler(
         build_specification(loaded.configuration)
 
 
-@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the optional evolution extra")
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the pymoo runtime")
 def test_pymoo_nsga2_uses_salvi_evaluation_reproducibly(
     tmp_path: Path,
 ) -> None:
@@ -262,7 +262,7 @@ def test_pymoo_nsga2_uses_salvi_evaluation_reproducibly(
         "evidence_weighted_recombination",
     ),
 )
-@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the optional evolution extra")
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the pymoo runtime")
 def test_pymoo_nsga2_accepts_salvi_crossover_operators(
     tmp_path: Path,
     crossover: str,
@@ -288,7 +288,7 @@ def test_pymoo_nsga2_accepts_salvi_crossover_operators(
     )
 
 
-@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the optional evolution extra")
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the pymoo runtime")
 def test_pymoo_nsga2_requires_budget_for_its_initial_population(tmp_path: Path) -> None:
     dataset = create_dataset_bundle(tmp_path / "dataset", rows=8, columns=3)
     path = write_configuration(
@@ -300,7 +300,7 @@ def test_pymoo_nsga2_requires_budget_for_its_initial_population(tmp_path: Path) 
         RunService().run(path)
 
 
-@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the optional evolution extra")
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the pymoo runtime")
 def test_pymoo_nsga2_does_not_write_misleading_pending_checkpoints(
     tmp_path: Path,
 ) -> None:
@@ -350,7 +350,7 @@ def test_pymoo_nsga2_does_not_write_misleading_pending_checkpoints(
         )
 
 
-@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the optional evolution extra")
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the pymoo runtime")
 def test_pymoo_nsga2_rejects_an_initializer_that_underproduces(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -375,7 +375,7 @@ def test_pymoo_nsga2_rejects_an_initializer_that_underproduces(
         engine.initialize(specification, prepared.context)
 
 
-@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the optional evolution extra")
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the pymoo runtime")
 def test_pymoo_nsga2_rejects_qd_components(
     tmp_path: Path,
 ) -> None:
@@ -396,7 +396,7 @@ def test_pymoo_nsga2_rejects_qd_components(
         build_specification(loaded.configuration)
 
 
-@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the optional evolution extra")
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the pymoo runtime")
 def test_pymoo_nsga2_maps_salvi_directions_and_returns_its_own_front(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -470,7 +470,7 @@ def test_pymoo_nsga2_rejects_resume_even_before_initialization() -> None:
         engine.progress()
 
 
-@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the optional evolution extra")
+@pytest.mark.skipif(not PYMOO_AVAILABLE, reason="requires the pymoo runtime")
 def test_pymoo_nsga2_honors_a_non_divisible_evaluation_budget(tmp_path: Path) -> None:
     dataset = create_dataset_bundle(tmp_path / "dataset", rows=8, columns=3)
     path = write_configuration(

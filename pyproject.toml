@@ -1,23 +1,81 @@
-[tool.uv]
-package = false
-default-groups = ["dev"]
+[project]
+name = "salvi"
+version = "0.1.0"
+description = "Component-oriented quality-diversity biclustering for heterogeneous data"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Adrian Segura" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "fastapi>=0.115,<0.116",
+  "matplotlib>=3.9,<4",
+  "numpy>=2,<2.5",
+  "platformdirs>=4.3,<5",
+  "pyarrow>=16,<22",
+  "pydantic>=2.10,<3",
+  "pymoo>=0.6.2,<0.7",
+  "python-multipart>=0.0.20,<1",
+  "PyYAML>=6,<7",
+  "scipy>=1.14,<2",
+  "uvicorn>=0.34,<0.35",
+]
 
-[tool.uv.workspace]
-members = ["packages/*"]
-
-[tool.uv.sources]
-salvi = { workspace = true }
-salvi-experiments = { workspace = true }
-
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
+  "build>=1.2,<2",
   "hypothesis>=6.112,<7",
   "httpx>=0.27,<0.29",
   "mypy>=1.13,<2",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<8",
   "ruff>=0.9,<1",
+  "twine>=6,<7",
   "types-PyYAML>=6.0.12,<7",
+]
+
+[project.scripts]
+salvi = "salvi.cli.main:main"
+salvi-exp = "salvi_experiments.cli:main"
+
+[project.entry-points."salvi.web.providers"]
+experiments = "salvi_experiments.web_provider:create_provider"
+
+[project.urls]
+Documentation = "https://github.com/AdrianSeguraOrtiz/SALVI/tree/main/docs"
+Issues = "https://github.com/AdrianSeguraOrtiz/SALVI/issues"
+Repository = "https://github.com/AdrianSeguraOrtiz/SALVI"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+  "packages/salvi/src/salvi",
+  "packages/salvi-experiments/src/salvi_experiments",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/CHANGELOG.md",
+  "/LICENSE",
+  "/README.md",
+  "/docs",
+  "/examples",
+  "/packages/salvi/src/salvi",
+  "/packages/salvi-experiments/src/salvi_experiments",
+  "/pyproject.toml",
 ]
 
 [tool.pytest.ini_options]

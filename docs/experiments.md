@@ -2,16 +2,17 @@
 
 SALVI separates scientific search from evaluation protocols. The core package
 produces and consumes canonical `DatasetBundle` and `BiclusterSet` artifacts.
-`salvi-experiments` measures objective alignment and biclustering accuracy without
-changing a reusable pipeline or using ground truth during search.
+The `salvi_experiments` namespace measures objective alignment and biclustering
+accuracy without changing a reusable pipeline or using ground truth during
+search.
 
 ## Installation
 
 From the repository root:
 
 ```bash
-uv sync --all-packages --all-extras --dev
-uv run salvi-exp --help
+python -m pip install -e ".[dev]"
+salvi-exp --help
 ```
 
 All experiment YAML paths are relative to the YAML file itself. Unknown and
@@ -55,7 +56,7 @@ ground truth and the direction-aware objective improvement. PNG and SVG figures
 show distributions and favorable fractions.
 
 ```bash
-uv run salvi-exp dataset objective-alignment \
+salvi-exp dataset objective-alignment \
   examples/experiments/objective-alignment.yaml
 ```
 
@@ -63,7 +64,7 @@ Use the benchmark command to repeat the same protocol over reusable pipelines
 and explicit DatasetBundles:
 
 ```bash
-uv run salvi-exp benchmark objective-alignment \
+salvi-exp benchmark objective-alignment \
   examples/experiments/objective-alignment-benchmark.yaml
 ```
 
@@ -95,7 +96,7 @@ The protocol writes exact metrics, confidence intervals, every best match, PNG
 and SVG figures, a JSON report, and a checksummed manifest:
 
 ```bash
-uv run salvi-exp dataset accuracy examples/experiments/accuracy.yaml
+salvi-exp dataset accuracy examples/experiments/accuracy.yaml
 ```
 
 Algorithm metadata explicitly records whether the real target count was known,
@@ -109,7 +110,7 @@ remain null; they are never inferred from standard output.
 checksum-pinned curation recipe:
 
 ```bash
-uv run salvi-exp convert uci uci-import.yaml clinical-dataset
+salvi-exp convert uci uci-import.yaml clinical-dataset
 ```
 
 The recipe declares UCI ID, missing tokens, explicit mappings, column roles and
@@ -121,7 +122,7 @@ external to search.
 A completed raw or final `BiclusterSet` can then be characterized independently:
 
 ```bash
-uv run salvi-exp dataset clinical-validation clinical-validation.yaml
+salvi-exp dataset clinical-validation clinical-validation.yaml
 ```
 
 The strict configuration binds one `ClinicalDatasetBundle`, one
@@ -173,7 +174,7 @@ An accuracy benchmark runs the dataset protocol for one algorithm over multiple
 cases:
 
 ```bash
-uv run salvi-exp benchmark accuracy \
+salvi-exp benchmark accuracy \
   examples/experiments/accuracy-benchmark.yaml
 ```
 
@@ -185,13 +186,18 @@ Algorithm comparison consumes existing dataset- or benchmark-accuracy result
 directories:
 
 ```bash
-uv run salvi-exp benchmark compare examples/experiments/comparison.yaml
+salvi-exp benchmark compare examples/experiments/comparison.yaml
 ```
 
 All algorithms must cover exactly the same dataset identifiers and task scope.
 The first algorithm is the declared baseline for paired REL, REC, and BE deltas.
-The comparison writes machine-readable Parquet and CSV tables plus PNG and SVG
-figures.
+By default, more than one accuracy result for the same algorithm and dataset is
+rejected because the paired experimental unit would otherwise be ambiguous. A
+stochastic algorithm may explicitly declare `replicate_aggregation: MEAN` or
+`MEDIAN`; its replicates are then reduced to one value per dataset before any
+cross-algorithm comparison. The comparison writes machine-readable Parquet and
+CSV tables, `paired-summary` with Wilcoxon tests, rank-biserial effects,
+Holm-adjusted p-values and bootstrap intervals, plus PNG and SVG figures.
 
 ## SALVI ablations
 
@@ -199,7 +205,7 @@ figures.
 same selected DatasetBundles:
 
 ```bash
-uv run salvi-exp benchmark ablation examples/experiments/ablation.yaml
+salvi-exp benchmark ablation examples/experiments/ablation.yaml
 ```
 
 The experiment never patches component parameters. Population size, batch size,
@@ -270,10 +276,38 @@ Case-level confidence intervals default to zero bootstrap repetitions because
 they are unnecessarily expensive in a large ablation. Aggregate intervals
 retain 2,000 repetitions by default. Both are configurable independently.
 
-Outputs include `case-status`, optional `selection-status`, `run-metrics`, `emitter-metrics`,
-`repertoire-metrics`, aggregate summaries, paired deltas against the first
-pipeline/selector combination, configuration and selector differences, and
-accuracy/runtime/diversity figures in CSV, Parquet, PNG, SVG, and JSON forms.
+When several stochastic seeds are run on each dataset, use the dataset as the
+inferential unit rather than treating seeds as independent biological cases:
+
+```yaml
+metrics:
+  paired_analysis_unit: DATASET
+  paired_seed_aggregation: MEAN
+```
+
+Only datasets with the complete configured seed set for both pipelines enter
+the paired analysis. Missing pairs are retained in the run tables and listed in
+`incomplete-paired-datasets`; they are never averaged from unequal seed counts.
+
+By default, paired contrasts compare the first pipeline with every subsequent
+pipeline. A progressive design should instead declare its planned adjacent and
+end-to-end contrasts explicitly:
+
+```yaml
+paired_comparisons:
+  - baseline_pipeline: baseline
+    compared_pipeline: intermediate
+  - baseline_pipeline: intermediate
+    compared_pipeline: final
+  - baseline_pipeline: baseline
+    compared_pipeline: final
+```
+
+Outputs include `case-status`, optional `selection-status`, `run-metrics`,
+`emitter-metrics`, `repertoire-metrics`, aggregate summaries, raw
+`paired-deltas`, inferential-unit `paired-analysis-deltas`, `paired-summary`,
+configuration and selector differences, and accuracy/runtime/diversity figures
+in CSV, Parquet, PNG, SVG, and JSON forms.
 
 Paired tables retain the raw `delta = compared - baseline`, declare whether
 `HIGHER` or `LOWER` is preferred for each metric, and also expose
@@ -293,7 +327,7 @@ G-Bic datasets are converted at the experiment interoperability boundary. A sour
 be one dataset triplet or a complete directory tree:
 
 ```bash
-uv run salvi-exp convert gbic /path/to/GBIC-data /path/to/DatasetBundles
+salvi-exp convert gbic /path/to/GBIC-data /path/to/DatasetBundles
 ```
 
 The converter discovers matching `_data.tsv`, `_bics.txt`, and `_bics.json`

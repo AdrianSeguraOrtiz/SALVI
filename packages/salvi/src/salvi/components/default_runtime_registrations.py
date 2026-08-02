@@ -266,7 +266,7 @@ def default_runtime_registrations() -> tuple[ComponentRegistration, ...]:
                 eliminate_duplicates=cast(PymooNsga2Configuration, config).eliminate_duplicates,
             ),
             compatibility_notes=(
-                "Requires the optional 'evolution' installation extra.",
+                "Uses the pymoo runtime bundled with the SALVI distribution.",
                 "Accepts any registered SALVI crossover operator.",
                 "Mutation operators must support pre-evaluation variation through pymoo.",
                 "Archives, parent selection, mate selection, emitters, and schedulers "
