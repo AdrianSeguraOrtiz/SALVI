@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from salvi.components.catalog_models import (
     ComponentDescription,
@@ -18,6 +18,7 @@ from salvi.components.catalog_models import (
     ObserverViewKind,
     ParameterWidget,
     RolePresentation,
+    SearchFamilyPresentation,
     WorkflowConnection,
     WorkflowConnectionKind,
     WorkflowStage,
@@ -36,7 +37,24 @@ from salvi.components.catalog_presentations import (
     _WORKFLOW_STAGES,
 )
 from salvi.components.protocols import ComponentKind
-from salvi.domain.enums import PatternKind
+from salvi.domain.enums import PatternKind, SearchFamily
+
+if TYPE_CHECKING:
+    from salvi.components.registry import ComponentRegistry
+
+
+_SEARCH_FAMILY_COPY: dict[SearchFamily, tuple[str, str, int]] = {
+    SearchFamily.QUALITY_DIVERSITY: (
+        "Quality diversity",
+        "Optimize local objective trade-offs independently across descriptor regions.",
+        10,
+    ),
+    SearchFamily.CONVENTIONAL_MULTI_OBJECTIVE: (
+        "Conventional multi-objective",
+        "Optimize one global Pareto population without descriptor cells.",
+        20,
+    ),
+}
 
 
 def role_catalog() -> tuple[RolePresentation, ...]:
@@ -58,6 +76,28 @@ def workflow_stage_catalog() -> tuple[WorkflowStagePresentation, ...]:
     """Return stages in their visual and execution order."""
 
     return _WORKFLOW_STAGES
+
+
+def search_family_catalog(registry: ComponentRegistry) -> tuple[SearchFamilyPresentation, ...]:
+    """Describe every registered search family and its explicit default engine."""
+
+    presentations: list[SearchFamilyPresentation] = []
+    for family in SearchFamily:
+        engines = registry.search_engines(family)
+        if not engines:
+            continue
+        default = registry.default_search_engine(family)
+        title, description, order = _SEARCH_FAMILY_COPY[family]
+        presentations.append(
+            SearchFamilyPresentation(
+                family=family,
+                title=title,
+                description=description,
+                order=order,
+                default_engine=default.name,
+            )
+        )
+    return tuple(sorted(presentations, key=lambda item: item.order))
 
 
 def _widget(schema: dict[str, Any]) -> ParameterWidget:
@@ -106,6 +146,8 @@ def describe_configuration(
     maturity: ComponentMaturity,
     parameter_patterns: dict[str, frozenset[PatternKind]],
     schema: dict[str, Any],
+    search_family: SearchFamily | None = None,
+    default_for_search_family: bool = False,
 ) -> ComponentDescription:
     required = frozenset(str(item) for item in schema.get("required", ()))
     properties = schema.get("properties", {})
@@ -181,6 +223,8 @@ def describe_configuration(
         parameters=tuple(parameters),
         stage=role.stage,
         order=role.order,
+        search_family=search_family,
+        default_for_search_family=default_for_search_family,
         observer_view=(
             _OBSERVER_PRESENTATIONS.get(name) if kind is ComponentKind.OBSERVER else None
         ),
@@ -201,6 +245,7 @@ __all__ = [
     "ObserverViewKind",
     "ParameterWidget",
     "RolePresentation",
+    "SearchFamilyPresentation",
     "WorkflowConnection",
     "WorkflowConnectionKind",
     "WorkflowStage",
@@ -209,5 +254,6 @@ __all__ = [
     "describe_configuration",
     "humanize_identifier",
     "role_catalog",
+    "search_family_catalog",
     "workflow_stage_catalog",
 ]

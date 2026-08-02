@@ -1,4 +1,13 @@
 export type JsonObject = Record<string, unknown>;
+export type SearchFamily = "QUALITY_DIVERSITY" | "CONVENTIONAL_MULTI_OBJECTIVE";
+
+export interface SearchFamilyDescription {
+  family: SearchFamily;
+  title: string;
+  description: string;
+  order: number;
+  default_engine: string;
+}
 
 export interface ParameterDescription {
   name: string;
@@ -27,6 +36,8 @@ export interface ComponentDescription {
   parameters: ParameterDescription[];
   stage: string;
   order: number;
+  search_family: SearchFamily | null;
+  default_for_search_family: boolean;
   observer_view: ObserverView | null;
 }
 
@@ -128,6 +139,7 @@ export interface Catalog {
   workflow_stages: WorkflowStageDescription[];
   roles: RoleDescription[];
   components: ComponentDescription[];
+  search_families: SearchFamilyDescription[];
   patterns: Array<Record<string, unknown>>;
   input_adapters: AdapterDescription[];
   analyses: AnalysisDescription[];
@@ -151,6 +163,7 @@ export interface CompositionResolution {
   valid: boolean;
   complete: boolean;
   allowed_patterns: string[];
+  search_family: SearchFamily | null;
   roles: RoleResolution[];
   workflow_connections: Array<{
     source: string;
@@ -158,6 +171,12 @@ export interface CompositionResolution {
     kind: "PRIMARY" | "SUPPORT" | "CONTROL" | "FEEDBACK";
   }>;
   errors: string[];
+}
+
+export interface CompositionTransition {
+  configuration: JsonObject;
+  resolution: CompositionResolution;
+  changed_roles: string[];
 }
 
 export interface DatasetRecord {

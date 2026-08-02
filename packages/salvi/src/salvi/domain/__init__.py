@@ -13,6 +13,7 @@ from salvi.domain.enums import (
     PatternKind,
     PatternScope,
     RunStatus,
+    SearchFamily,
 )
 from salvi.domain.models import (
     Bicluster,
@@ -116,6 +117,7 @@ __all__ = [
     "RunStatus",
     "SchedulerReport",
     "SearchCheckpoint",
+    "SearchFamily",
     "SearchProgress",
     "SearchUpdate",
 ]

@@ -30,6 +30,7 @@ def _registration(
     maturity: ComponentMaturity = ComponentMaturity.STABLE,
     parameter_patterns: tuple[tuple[str, frozenset[PatternKind]], ...] = (),
     continuation_fingerprint_exclusions: frozenset[str] = frozenset(),
+    default_for_search_family: bool = False,
     prototype_component: Component | None = None,
 ) -> ComponentRegistration:
     prototype = (
@@ -67,6 +68,7 @@ def _registration(
             if kind is ComponentKind.SEARCH_ENGINE
             else None
         ),
+        default_for_search_family=default_for_search_family,
     )
 
 

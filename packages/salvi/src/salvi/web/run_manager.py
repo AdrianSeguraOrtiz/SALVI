@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import threading
+import traceback
 from datetime import UTC, datetime
 from multiprocessing.process import BaseProcess
 from multiprocessing.synchronize import Event as MultiprocessingEvent
@@ -24,6 +25,8 @@ from salvi.web.adapters import normalized_identifier
 from salvi.web.models import WebRunRecord
 from salvi.web.storage import WebStateStore
 
+_WORKER_ERROR_FILENAME = "worker-error.json"
+
 
 class ProcessCancellationSignal:
     def __init__(self, event: MultiprocessingEvent) -> None:
@@ -42,6 +45,7 @@ def _run_child(
     pipeline_path: str,
     binding_payload: dict[str, Any],
     cancellation_event: MultiprocessingEvent,
+    worker_error_path: str,
 ) -> None:
     try:
         RunService().run_pipeline(
@@ -49,7 +53,23 @@ def _run_child(
             RunBinding.model_validate(binding_payload),
             cancellation=ProcessCancellationSignal(cancellation_event),
         )
-    except (Exception, KeyboardInterrupt):
+    except (Exception, KeyboardInterrupt, SystemExit) as error:
+        error_path = Path(worker_error_path)
+        temporary_path = error_path.with_suffix(".tmp")
+        temporary_path.write_text(
+            json.dumps(
+                {
+                    "error_type": type(error).__name__,
+                    "message": str(error) or type(error).__name__,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "traceback": traceback.format_exc(),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        temporary_path.replace(error_path)
         raise SystemExit(1) from None
 
 
@@ -90,6 +110,7 @@ class WebRunManager:
         run_directory = self._store.paths.runs / identifier
         output = run_directory / "output"
         pipeline_path = run_directory / "pipeline.yaml"
+        worker_error_path = run_directory / _WORKER_ERROR_FILENAME
         if self._store.get_run(identifier) is not None or run_directory.exists():
             raise ArtifactError(f"a run named {identifier!r} already exists")
         binding = RunBinding(
@@ -125,6 +146,7 @@ class WebRunManager:
                     str(pipeline_path),
                     binding.model_dump(mode="json"),
                     cancellation,
+                    str(worker_error_path),
                 ),
                 name=f"salvi-{identifier}",
                 daemon=False,
@@ -233,13 +255,26 @@ class WebRunManager:
             )
             return status, error, started_at, finished_at
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            worker_error = WebRunManager._read_worker_error(record)
             status = RunStatus.CANCELLED if exit_code == -15 else RunStatus.FAILED
             return (
                 status,
-                f"SALVI worker exited with code {exit_code} before writing final metadata.",
+                worker_error
+                or (f"SALVI worker exited with code {exit_code} before writing final metadata."),
                 None,
                 datetime.now(UTC),
             )
+
+    @staticmethod
+    def _read_worker_error(record: WebRunRecord) -> str | None:
+        error_path = record.pipeline_path.parent / _WORKER_ERROR_FILENAME
+        try:
+            payload = json.loads(error_path.read_text(encoding="utf-8"))
+            error_type = str(payload["error_type"])
+            message = str(payload["message"])
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return f"{error_type}: {message}"
 
 
 __all__ = ["ProcessCancellationSignal", "WebRunManager"]

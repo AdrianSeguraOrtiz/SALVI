@@ -16,6 +16,8 @@ const component: ComponentDescription = {
   maturity: "STABLE",
   stage: "OUTPUT",
   order: 1,
+  search_family: null,
+  default_for_search_family: false,
   observer_view: null,
   parameters: [
     {

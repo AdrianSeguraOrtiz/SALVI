@@ -130,16 +130,30 @@ monitoring:
       parameters: {}
 
 final_selection:
-  name: containment_marginal_quality
+  name: adaptive_residual_evidence_cover
   parameters:
-    max_objective_degradation: 0.15
-    max_degradation_per_log_area_gain: 0.20
+    objective_names: [internal_coherence, contrast]
+    quality_scale: unit_interval
+    overlap_penalty: 0.5
+    low_quality_penalty: 0.5
+    complexity_penalty: 0.25
+    minimum_marginal_evidence: 1.0
+    maximum_dense_cells: 10000000
+    minimum_quality_floor: 0.5
+    maximum_quality_floor: 0.85
+    minimum_candidates_for_knee: 8
+    minimum_knee_prominence: 0.05
+    fallback_quality_quantile: 0.5
 
 ```
 
 ## Run binding
 
 Supply the concrete data and runtime identity alongside the pipeline:
+
+The CLI and web interface default to seed `42`, matching the reference
+experiments. Pass `--seed` explicitly whenever a study requires another seed or
+multiple independent repetitions.
 
 ```bash
 salvi validate pipeline.yaml \
@@ -182,14 +196,18 @@ parameters remain relative to the pipeline file itself.
 Omitting `final_selection` reports the search engine's repertoire directly.
 There is no pass-through selector component.
 
-`containment_marginal_quality` is the default final-selector strategy for
-cardinality QD searches. It builds exact row-and-column containment chains and
-tries to replace smaller nested candidates by progressively larger candidates.
-The replacement stops when either the worst normalized objective loss exceeds
-`max_objective_degradation` or that loss divided by logarithmic area gain
-exceeds `max_degradation_per_log_area_gain`. Unrelated containment branches are
-never compared, so a globally excellent tiny bicluster cannot suppress a
-structurally unrelated larger detection.
+`adaptive_residual_evidence_cover` is the default final-selector strategy. It
+converts the configured objectives into balanced per-column utility, estimates
+a run-local quality floor from the terminal repertoire, and greedily retains
+biclusters that explain high-quality observed matrix cells not already covered
+by previous selections. Redundant evidence, columns below the quality floor,
+and combinatorial membership complexity are penalized. Selection stops when no
+candidate contributes `minimum_marginal_evidence`.
+
+`containment_marginal_quality` remains available as a baseline. It builds exact
+row-and-column containment chains and replaces nested candidates with larger
+ones only while normalized objective degradation stays within its configured
+absolute and area-relative limits.
 
 Parent selection is independently configurable under `search`:
 
@@ -407,18 +425,28 @@ parameters are:
 - `population_size`, default `64`;
 - `eliminate_duplicates`, default `true`.
 
-The current catalog offers `half_uniform_membership` under `search.crossover` and
-`bit_flip_membership` under `search.mutation`. Their parameters hold crossover
-application and exchange probabilities, and mutation application and per-bit
-probabilities. Operators declare their pymoo factory lazily, allowing additional
-pymoo wrappers to be registered without changing the engine. SALVI evaluates the
+The current mutation catalog offers `bit_flip_membership` under
+`search.mutation`, while every registered SALVI crossover can be used under
+`search.crossover`. Their parameters hold crossover application and exchange
+probabilities, and mutation application and per-bit probabilities. Mutation
+operators used by this engine must expose the pre-evaluation pymoo variation
+contract. Operators declare that factory lazily, allowing additional pymoo
+wrappers to be registered without changing the engine. SALVI evaluates the
 resulting candidates and preserves all pattern
 and per-column diagnostics. The engine returns pymoo's feasible non-dominated
 front, or its least-infeasible front if no feasible candidate exists. Archive,
-parent selection, mate selection, emitters and scheduler are invalid in an
-NSGA-II pipeline and fail validation. The population must not exceed the
+descriptors, parent selection, mate selection, emitters and scheduler are invalid
+in an NSGA-II pipeline and fail validation. The population must not exceed the
 evaluation budget. `resume_from_checkpoint` and periodic checkpoints are
 rejected because this engine does not support exact resumption.
+
+Search families are not configuration fields. They are derived from
+`search.engine` and exposed by the public catalog for composition tools. The web
+selector performs a core-owned transition to the default registered architecture
+of a family, then exports an ordinary schema-version-1 pipeline. Directly
+selecting an engine or editing YAML applies the same composition contract; for
+example, descriptors alongside `pymoo_nsga2` are rejected by both validation and
+execution.
 
 Candidate initialization is selected through `search.initialization`:
 

@@ -697,7 +697,7 @@ _OBSERVER_PRESENTATIONS: dict[str, ObserverPresentation] = {
         ),
     ),
     "qd_archive_diagnostics": ObserverPresentation(
-        view_kind=ObserverViewKind.HEATMAP,
+        view_kind=ObserverViewKind.QD_DIAGNOSTICS,
         title="QD archive diagnostics",
         metric_patterns=("qd.*",),
         empty_message="Cell diagnostics appear after archive sampling.",

@@ -7,6 +7,7 @@ const resolution: CompositionResolution = {
   valid: false,
   complete: false,
   allowed_patterns: ["CONSTANT"],
+  search_family: null,
   errors: [],
   workflow_connections: [],
   roles: [
@@ -105,6 +106,8 @@ describe("PipelineWorkflow", () => {
                 parameters: [],
                 stage: "SEARCH",
                 order: 0,
+                search_family: "QUALITY_DIVERSITY",
+                default_for_search_family: true,
                 observer_view: null
               }
             }

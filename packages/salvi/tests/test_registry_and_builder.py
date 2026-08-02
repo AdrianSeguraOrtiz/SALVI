@@ -36,6 +36,7 @@ from salvi.domain import (
     Dataset,
     PatternKind,
     PreparedDataset,
+    SearchFamily,
 )
 from salvi.engine.archive import DeepGridMomeArchive, DeepGridMomeConfiguration
 from salvi.engine.mome import SerialMomeSearchEngine
@@ -49,10 +50,15 @@ def test_engine_composition_contracts_reject_invalid_declarations() -> None:
     with pytest.raises(ValueError, match="smaller"):
         RoleCardinality(minimum=2, maximum=1)
     with pytest.raises(ValueError, match="must not be blank"):
-        EngineCompositionContract(engine_name=" ", rules=())
+        EngineCompositionContract(
+            engine_name=" ",
+            search_family=SearchFamily.QUALITY_DIVERSITY,
+            rules=(),
+        )
     with pytest.raises(ValueError, match="must be unique"):
         EngineCompositionContract(
             engine_name="duplicate",
+            search_family=SearchFamily.QUALITY_DIVERSITY,
             rules=(
                 (ComponentKind.OBJECTIVE, RoleCardinality()),
                 (ComponentKind.OBJECTIVE, RoleCardinality()),
@@ -229,7 +235,11 @@ def test_registry_rejects_incoherent_registration_metadata() -> None:
             registration(
                 kind=ComponentKind.SEARCH_ENGINE,
                 provides=frozenset({"search-engine"}),
-                composition_contract=EngineCompositionContract(engine_name="other", rules=()),
+                composition_contract=EngineCompositionContract(
+                    engine_name="other",
+                    search_family=SearchFamily.QUALITY_DIVERSITY,
+                    rules=(),
+                ),
             ),
             "mismatched composition contract",
         ),
@@ -237,6 +247,7 @@ def test_registry_rejects_incoherent_registration_metadata() -> None:
             registration(
                 composition_contract=EngineCompositionContract(
                     engine_name="component",
+                    search_family=SearchFamily.QUALITY_DIVERSITY,
                     rules=(),
                 )
             ),
@@ -344,6 +355,7 @@ def test_registry_contains_every_runtime_component() -> None:
         },
         ComponentKind.TERMINATION: {"evaluation_budget"},
         ComponentKind.FINAL_SELECTOR: {
+            "adaptive_residual_evidence_cover",
             "containment_marginal_quality",
         },
     }
@@ -351,6 +363,11 @@ def test_registry_contains_every_runtime_component() -> None:
     for kind, required_names in expected.items():
         available = {registration.name for registration in registry.describe(kind)}
         assert required_names <= available
+    assert registry.default_search_engine(SearchFamily.QUALITY_DIVERSITY).name == "serial_mome"
+    assert (
+        registry.default_search_engine(SearchFamily.CONVENTIONAL_MULTI_OBJECTIVE).name
+        == "pymoo_nsga2"
+    )
 
 
 def test_registry_detects_factory_capability_mismatch() -> None:

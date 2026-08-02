@@ -27,6 +27,13 @@ class ObjectiveDirection(StrEnum):
     MAXIMIZE = "MAXIMIZE"
 
 
+class SearchFamily(StrEnum):
+    """High-level search architecture selected by a search engine."""
+
+    QUALITY_DIVERSITY = "QUALITY_DIVERSITY"
+    CONVENTIONAL_MULTI_OBJECTIVE = "CONVENTIONAL_MULTI_OBJECTIVE"
+
+
 class DescriptorValueKind(StrEnum):
     INTEGER = "INTEGER"
     CONTINUOUS = "CONTINUOUS"

@@ -465,7 +465,7 @@ def test_cli_reports_versions_and_delegates_profiling(
             identifier="configuration",
             dataset_bundle=tmp_path / "dataset",
             output_directory=tmp_path / "run-output",
-            seed=0,
+            seed=42,
             overwrite=True,
         ),
     }

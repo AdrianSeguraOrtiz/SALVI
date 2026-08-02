@@ -36,9 +36,13 @@ from salvi.application.configuration import (
     serialize_pipeline_configuration,
 )
 from salvi.application.defaults import default_scientific_configuration
-from salvi.components.catalog import role_catalog, workflow_stage_catalog
+from salvi.components.catalog import (
+    role_catalog,
+    search_family_catalog,
+    workflow_stage_catalog,
+)
 from salvi.components.defaults import default_component_registry
-from salvi.domain.enums import PatternKind, RunStatus
+from salvi.domain.enums import PatternKind, RunStatus, SearchFamily
 from salvi.exceptions import ArtifactError, ConfigurationError, SalviError
 from salvi.infrastructure.events import SQLiteRunEventSource
 from salvi.patterns import default_pattern_catalog
@@ -61,6 +65,10 @@ class CompositionRequest(StrictRequest):
     configuration: dict[str, Any]
 
 
+class SearchFamilyTransitionRequest(CompositionRequest):
+    search_family: SearchFamily
+
+
 class ConfirmImportRequest(StrictRequest):
     columns: tuple[WebColumnProposal, ...] | None = None
     adapter_configuration: dict[str, Any] | None = None
@@ -70,7 +78,7 @@ class StartRunRequest(StrictRequest):
     pipeline: str = Field(min_length=1)
     dataset_identifier: str = Field(min_length=1)
     run_identifier: str = Field(min_length=1)
-    seed: int = Field(default=0, ge=0)
+    seed: int = Field(default=42, ge=0)
     analyses: tuple[str, ...] = ()
 
     @field_validator("analyses")
@@ -181,6 +189,9 @@ def create_app(
             "workflow_stages": [item.model_dump(mode="json") for item in workflow_stage_catalog()],
             "roles": [item.model_dump(mode="json") for item in role_catalog()],
             "components": [item.model_dump(mode="json") for item in component_registry.catalog()],
+            "search_families": [
+                item.model_dump(mode="json") for item in search_family_catalog(component_registry)
+            ],
             "patterns": [
                 {
                     "kind": item.kind.value,
@@ -208,6 +219,15 @@ def create_app(
     @app.post(f"{API_PREFIX}/pipelines/resolve")
     async def resolve_composition(request: CompositionRequest) -> dict[str, Any]:
         return composition.resolve(request.configuration).model_dump(mode="json")
+
+    @app.post(f"{API_PREFIX}/pipelines/search-family")
+    async def switch_search_family(
+        request: SearchFamilyTransitionRequest,
+    ) -> dict[str, Any]:
+        return composition.switch_search_family(
+            request.configuration,
+            request.search_family,
+        ).model_dump(mode="json")
 
     @app.post(f"{API_PREFIX}/pipelines/validate")
     async def validate_pipeline(

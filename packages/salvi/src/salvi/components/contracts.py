@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from salvi.components.protocols import Component, ComponentKind, CompositionAwareComponent
+from salvi.domain.enums import SearchFamily
 from salvi.exceptions import ComponentError
 
 
@@ -36,6 +37,7 @@ class EngineCompositionContract:
     """Roles consumed by one search-engine implementation."""
 
     engine_name: str
+    search_family: SearchFamily
     rules: tuple[tuple[ComponentKind, RoleCardinality], ...]
 
     def __post_init__(self) -> None:
@@ -102,7 +104,11 @@ def qd_engine_contract(engine_name: str) -> EngineCompositionContract:
             ComponentKind.SCHEDULER: RoleCardinality(1, 1),
         }
     )
-    return EngineCompositionContract(engine_name=engine_name, rules=tuple(rules.items()))
+    return EngineCompositionContract(
+        engine_name=engine_name,
+        search_family=SearchFamily.QUALITY_DIVERSITY,
+        rules=tuple(rules.items()),
+    )
 
 
 OPTIONAL_STRATEGY_CAPABILITIES: Mapping[ComponentKind, str] = {
@@ -221,11 +227,16 @@ def nsga2_engine_contract(engine_name: str) -> EngineCompositionContract:
     rules = _common_rules(minimum_objectives=2, minimum_descriptors=0)
     rules.update(
         {
+            ComponentKind.DESCRIPTOR: RoleCardinality(0, 0),
             ComponentKind.CROSSOVER_OPERATOR: RoleCardinality(1, 1),
             ComponentKind.MUTATION_OPERATOR: RoleCardinality(1, 1),
         }
     )
-    return EngineCompositionContract(engine_name=engine_name, rules=tuple(rules.items()))
+    return EngineCompositionContract(
+        engine_name=engine_name,
+        search_family=SearchFamily.CONVENTIONAL_MULTI_OBJECTIVE,
+        rules=tuple(rules.items()),
+    )
 
 
 __all__ = [

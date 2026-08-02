@@ -79,7 +79,7 @@ def test_event_store_round_trip_metrics_and_artifacts(tmp_path: Path) -> None:
 
 
 def test_event_source_does_not_initialize_a_writer_schema(tmp_path: Path) -> None:
-    path = tmp_path / "run.sqlite"
+    path = tmp_path / "missing-output" / "run.sqlite"
 
     source = SQLiteRunEventSource(path)
 
@@ -91,6 +91,8 @@ def test_event_source_does_not_initialize_a_writer_schema(tmp_path: Path) -> Non
     assert source.artifacts() == ()
     assert source.metric_names() == ()
     assert source.metric_series("metric") == ()
+    assert not path.exists()
+    assert not path.parent.exists()
 
 
 def test_event_pages_and_metric_series_are_bounded_and_ordered(tmp_path: Path) -> None:

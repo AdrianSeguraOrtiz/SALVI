@@ -4,6 +4,7 @@ from salvi.components.default_data_registrations import default_data_registratio
 from salvi.components.default_runtime_registrations import default_runtime_registrations
 from salvi.components.default_search_registrations import default_search_registrations
 from salvi.components.registry import ComponentRegistry
+from salvi.domain.enums import SearchFamily
 
 
 def default_component_registry() -> ComponentRegistry:
@@ -17,6 +18,9 @@ def default_component_registry() -> ComponentRegistry:
     )
     for entry in entries:
         registry.register(entry)
+    for family in SearchFamily:
+        if registry.search_engines(family):
+            registry.default_search_engine(family)
     return registry
 
 

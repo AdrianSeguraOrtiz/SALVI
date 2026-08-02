@@ -19,6 +19,7 @@ import { api } from "./api";
 import { DatasetImport } from "./components/DatasetImport";
 import { ComponentEditorBoundary } from "./components/ComponentEditorBoundary";
 import { PipelineWorkflow } from "./components/PipelineWorkflow";
+import { SearchFamilySelector } from "./components/SearchFamilySelector";
 import { StageCatalog } from "./components/StageCatalog";
 import type {
   Catalog,
@@ -27,7 +28,8 @@ import type {
   DatasetRecord,
   JsonObject,
   RoleResolution,
-  RunRecord
+  RunRecord,
+  SearchFamily
 } from "./types";
 
 type View = "build" | "monitor" | "results";
@@ -107,7 +109,7 @@ export function App() {
   const [dataset, setDataset] = useState("");
   const [selectedAnalyses, setSelectedAnalyses] = useState<string[]>([]);
   const [runIdentifier, setRunIdentifier] = useState("salvi-run");
-  const [seed, setSeed] = useState(0);
+  const [seed, setSeed] = useState(42);
   const [selectedRun, setSelectedRun] = useState("");
   const [selectedRole, setSelectedRole] = useState("");
   const [selectedStage, setSelectedStage] = useState("");
@@ -115,6 +117,7 @@ export function App() {
   const [yamlOpen, setYamlOpen] = useState(false);
   const [yaml, setYaml] = useState("");
   const [busy, setBusy] = useState(false);
+  const [familyBusy, setFamilyBusy] = useState(false);
   const [notice, setNotice] = useState<{ kind: "error" | "success"; text: string } | null>(null);
   const yamlUpload = useRef<HTMLInputElement>(null);
 
@@ -242,6 +245,29 @@ export function App() {
       setNotice({ kind: "error", text: cause instanceof Error ? cause.message : String(cause) });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function switchSearchFamily(family: SearchFamily) {
+    if (!configuration || resolution?.search_family === family || familyBusy) return;
+    setFamilyBusy(true);
+    setNotice(null);
+    try {
+      const transition = await api.switchSearchFamily(configuration, family);
+      setConfiguration(transition.configuration);
+      setResolution(transition.resolution);
+      setSelectedRole("");
+      setSelectedStage("");
+      setSelectedInstance("");
+      const selected = catalog?.search_families.find((item) => item.family === family);
+      setNotice({
+        kind: "success",
+        text: `${selected?.title ?? family} architecture loaded; ${transition.changed_roles.length} workflow roles updated.`
+      });
+    } catch (cause) {
+      setNotice({ kind: "error", text: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setFamilyBusy(false);
     }
   }
 
@@ -432,32 +458,42 @@ export function App() {
             </div>
           </header>
 
-          <section className="pattern-strip">
-            <span>Allowed patterns</span>
-            {catalog.patterns.map((pattern) => {
-              const name = String(pattern.kind);
-              const patterns = configuration.patterns as JsonObject;
-              const allowed = (patterns.allowed as string[]) ?? [];
-              const active = allowed.includes(name);
-              return (
-                <button
-                  key={name}
-                  className={active ? "active" : ""}
-                  onClick={() => {
-                    const next = active
-                      ? allowed.filter((item) => item !== name)
-                      : [...allowed, name];
-                    if (next.length > 0) {
-                      setConfiguration(
-                        setAtPath(configuration, ["patterns", "allowed"], next)
-                      );
-                    }
-                  }}
-                >
-                  {name}
-                </button>
-              );
-            })}
+          <section className="pipeline-control-bar">
+            <SearchFamilySelector
+              families={catalog.search_families}
+              selected={resolution?.search_family ?? null}
+              busy={familyBusy}
+              onSelect={switchSearchFamily}
+            />
+            <div className="pattern-control">
+              <span>Allowed patterns</span>
+              <div>
+                {catalog.patterns.map((pattern) => {
+                  const name = String(pattern.kind);
+                  const patterns = configuration.patterns as JsonObject;
+                  const allowed = (patterns.allowed as string[]) ?? [];
+                  const active = allowed.includes(name);
+                  return (
+                    <button
+                      key={name}
+                      className={active ? "active" : ""}
+                      onClick={() => {
+                        const next = active
+                          ? allowed.filter((item) => item !== name)
+                          : [...allowed, name];
+                        if (next.length > 0) {
+                          setConfiguration(
+                            setAtPath(configuration, ["patterns", "allowed"], next)
+                          );
+                        }
+                      }}
+                    >
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <span className={`composition-state ${resolution?.complete ? "valid" : "invalid"}`}>
               {resolution?.complete ? <CheckCircle2 size={16} /> : <FlaskConical size={16} />}
               {resolution?.complete ? "Runnable composition" : "Composition needs attention"}
@@ -723,6 +759,9 @@ export function App() {
                         </header>
                         <p>{instance.component.description}</p>
                         <div className="instance-tags">
+                          {instance.component.default_for_search_family ? (
+                            <span className="family-default">family default</span>
+                          ) : null}
                           {instance.component.supported_patterns.map((pattern) => (
                             <span key={pattern}>{pattern}</span>
                           ))}

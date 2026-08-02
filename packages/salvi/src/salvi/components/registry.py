@@ -44,7 +44,7 @@ from salvi.components.protocols import (
     SourceColumnFilteringStage,
     TerminationCriterion,
 )
-from salvi.domain.enums import PatternKind
+from salvi.domain.enums import PatternKind, SearchFamily
 from salvi.exceptions import ComponentError
 
 ComponentFactory = Callable[[BaseModel], Component]
@@ -94,6 +94,7 @@ class ComponentRegistration:
     parameter_patterns: tuple[tuple[str, frozenset[PatternKind]], ...] = ()
     continuation_fingerprint_exclusions: frozenset[str] = frozenset()
     composition_contract: EngineCompositionContract | None = None
+    default_for_search_family: bool = False
 
     def describe(self) -> ComponentDescription:
         title = self.title or humanize_identifier(self.name)
@@ -111,6 +112,12 @@ class ComponentRegistration:
             maturity=self.maturity,
             parameter_patterns=dict(self.parameter_patterns),
             schema=self.configuration_model.model_json_schema(),
+            search_family=(
+                None
+                if self.composition_contract is None
+                else self.composition_contract.search_family
+            ),
+            default_for_search_family=self.default_for_search_family,
         )
 
 
@@ -148,6 +155,13 @@ class ComponentRegistry:
         elif registration.composition_contract is not None:
             raise ComponentError(
                 "only search-engine registrations may declare composition contracts"
+            )
+        if (
+            registration.default_for_search_family
+            and registration.kind is not ComponentKind.SEARCH_ENGINE
+        ):
+            raise ComponentError(
+                "only search-engine registrations may be defaults for a search family"
             )
         parameter_names = set(registration.configuration_model.model_fields)
         unknown_parameters = {
@@ -311,6 +325,34 @@ class ComponentRegistry:
             if kind is None or registration.kind is kind
         )
         return tuple(sorted(registrations, key=lambda item: (item.kind.value, item.name)))
+
+    def search_engines(
+        self,
+        family: SearchFamily,
+    ) -> tuple[ComponentRegistration, ...]:
+        """Return search engines registered for one architecture family."""
+
+        return tuple(
+            registration
+            for registration in self.describe(ComponentKind.SEARCH_ENGINE)
+            if registration.composition_contract is not None
+            and registration.composition_contract.search_family is family
+        )
+
+    def default_search_engine(self, family: SearchFamily) -> ComponentRegistration:
+        """Return the single explicit default engine for an architecture family."""
+
+        defaults = tuple(
+            registration
+            for registration in self.search_engines(family)
+            if registration.default_for_search_family
+        )
+        if len(defaults) != 1:
+            raise ComponentError(
+                f"search family {family.value} requires exactly one default engine, "
+                f"found {len(defaults)}"
+            )
+        return defaults[0]
 
     def catalog(
         self,

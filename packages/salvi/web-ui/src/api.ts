@@ -1,12 +1,14 @@
 import type {
   Catalog,
   CompositionResolution,
+  CompositionTransition,
   DatasetRecord,
   JsonObject,
   Metric,
   ResultFilters,
   ResultSummary,
-  RunRecord
+  RunRecord,
+  SearchFamily
 } from "./types";
 
 const API = "/api/v1";
@@ -41,6 +43,12 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ configuration })
+    }),
+  switchSearchFamily: (configuration: JsonObject, searchFamily: SearchFamily) =>
+    request<CompositionTransition>("/pipelines/search-family", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ configuration, search_family: searchFamily })
     }),
   datasets: async () => (await request<{ items: DatasetRecord[] }>("/datasets")).items,
   deleteDataset: (identifier: string) =>

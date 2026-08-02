@@ -165,14 +165,15 @@ typed insertion outcomes. Empty regions are neither allocated nor treated as
 required coverage. When a cell exceeds its configured depth, deterministic
 crowding preserves objective extremes and removes one interior member.
 
-Final extraction is a separate component and cannot alter search state.
-`ContainmentMarginalQualitySelector` filters invalid or infeasible evaluations,
-removes exact duplicates and builds exact row-and-column containment chains. It
-replaces nested candidates with larger representatives only while normalized
-objective degradation remains below configured absolute and area-relative
-limits. Unrelated structural branches remain independent. Each reported
-evaluation retains its archive coordinate and a normalized selection record that
-links every consolidated source candidate back to the terminal search checkpoint.
+Final extraction is a separate component and cannot alter search state. The
+default `AdaptiveResidualEvidenceCoverSelector` removes exact duplicates and
+greedily covers still-unexplained observed matrix cells with quality-weighted
+evidence, while penalizing overlap, weak columns, and membership complexity. Its
+quality floor is inferred from the terminal repertoire without ground truth.
+`ContainmentMarginalQualitySelector` remains an alternative that consolidates
+exact row-and-column containment chains under objective-loss limits. Each
+reported evaluation retains its archive coordinate and a normalized selection
+record linking consolidated source candidates back to the terminal checkpoint.
 Selectors consume the terminal search repertoire and return a canonical
 `Repertoire`; they cannot evaluate new candidates or mutate search state.
 
@@ -203,8 +204,11 @@ listed by that contract are forbidden, mandatory roles must be present, and
 optional variation strategies are rejected unless an active engine or emitter
 declares that it consumes them. MOME requires objectives, descriptors, one
 archive, one or more emitters and a scheduler. NSGA-II requires at least two
-objectives plus one crossover and one mutation operator. Both engines accept zero
-or more constraints. A missing optional
+objectives plus one crossover and one mutation operator, and explicitly forbids
+descriptors because it has no QD behavior space. Both engines accept zero or more
+constraints. Every engine also declares a search family. The catalog registers
+one default engine per family, allowing clients to request an architecture
+transition without encoding engine names or compatibility rules. A missing optional
 stage, including final selection, is represented by its absence rather than by a
 null or pass-through component.
 

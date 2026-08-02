@@ -13,13 +13,17 @@ test("Build, Monitor, and Results remain usable without overlap", async ({ page 
   await expect(page.getByText("Source filters", { exact: true })).toHaveCount(0);
   const searchStage = page.locator(".workflow-stage.stage-search");
   const searchAdd = page.getByRole("button", { name: "Add component in SEARCH" });
-  const searchStageBox = await searchStage.boundingBox();
-  const searchAddBox = await searchAdd.boundingBox();
-  expect(searchStageBox).not.toBeNull();
-  expect(searchAddBox).not.toBeNull();
-  expect(searchAddBox!.y + searchAddBox!.height).toBeLessThanOrEqual(
-    searchStageBox!.y + searchStageBox!.height + 1
-  );
+  await expect
+    .poll(async () => {
+      const searchStageBox = await searchStage.boundingBox();
+      const searchAddBox = await searchAdd.boundingBox();
+      if (!searchStageBox || !searchAddBox) return false;
+      return (
+        searchAddBox.y + searchAddBox.height <=
+        searchStageBox.y + searchStageBox.height + 1
+      );
+    })
+    .toBe(true);
   await expect
     .poll(() =>
       page
@@ -53,38 +57,18 @@ test("Build, Monitor, and Results remain usable without overlap", async ({ page 
     await expect(sourceFilterNode.locator(".node-instance")).toHaveText("1 selected");
     await page.locator(".drawer-close").click();
 
-    await engineNode.click();
-    await expect(page.locator(".drawer")).toBeVisible();
-    await expect(page.locator(".drawer").getByText("1 configured")).toBeVisible();
-    await expect(page.locator(".drawer .instance-card.active")).toHaveCount(1);
-    await page.locator(".drawer-close").click();
-
-    await page.getByRole("button", { name: "Add component in SEARCH" }).click();
-    const nsga2 = page
-      .locator(".drawer .instance-card")
-      .filter({ hasText: "Pymoo Nsga2" });
-    await nsga2.getByRole("button", { name: "Replace current" }).click();
+    await page.getByRole("radio", { name: /Conventional multi-objective/i }).click();
     await expect(page.getByRole("button", { name: /Search engine: Pymoo Nsga2/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Descriptors:/i })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /Archive:/i })).toHaveCount(0);
+    await page.getByRole("button", { name: /Search engine: Pymoo Nsga2/i }).click();
+    const mome = page.locator(".drawer .instance-card").filter({ hasText: "Serial Mome" });
+    await expect(mome).toHaveClass(/blocked/);
+    await expect(mome.getByText(/belongs to the QUALITY_DIVERSITY search family/)).toBeVisible();
     await page.locator(".drawer-close").click();
 
-    const invalidArchive = page.getByRole("button", { name: /Archive: Deep Grid Mome/i });
-    await expect(invalidArchive).toHaveClass(/state-invalid/);
-    await invalidArchive.click();
-    await expect(page.locator(".drawer").getByRole("heading", { name: "Archive" })).toBeVisible();
-    await expect(page.locator(".drawer textarea.code-input")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Build" })).toBeVisible();
-    await page.locator(".drawer-close").click();
-
-    const invalidObservers = page
-      .locator(".workflow-node.state-invalid")
-      .filter({ hasText: "Observers" });
-    await expect(invalidObservers).toHaveCount(1);
-    await invalidObservers.click();
-    await expect(page.locator(".drawer").getByRole("heading", { name: "Observers" })).toBeVisible();
-    await expect(
-      page.locator(".drawer").getByText("archive_coverage still requires: archive")
-    ).toBeVisible();
-    await page.locator(".drawer-close").click();
+    await page.getByRole("radio", { name: /Quality diversity/i }).click();
+    await expect(page.getByRole("button", { name: /Search engine: Serial MOME/i })).toBeVisible();
   }
 
   await page.getByRole("button", { name: "Monitor" }).click();

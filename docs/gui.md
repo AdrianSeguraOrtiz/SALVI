@@ -50,6 +50,17 @@ NSGA-II-specific rules. Unused optional roles do not appear. Configured
 components that become incompatible remain visible as invalid until the user
 resolves them; changing another component never silently removes YAML content.
 
+The **Search architecture** selector is an explicit topology transition rather
+than another YAML field. Its available families, descriptions and default
+engines come from the component catalog. Selecting quality diversity loads the
+registered MOME architecture; selecting conventional multi-objective search
+loads the registered NSGA-II architecture. The transition preserves patterns,
+objectives, constraints, termination and preparation, while replacing roles
+that are intrinsic to the search family. The engine drawer continues to show
+all registered engines, but engines outside the active family are disabled with
+the reason reported by the resolver. Exported YAML remains the exact pipeline
+accepted by the CLI and contains no GUI-only family setting.
+
 Component parameters use catalog descriptions, units, schemas and recommended
 widgets. A configured repeatable role is represented by one compact node with
 its exact instance count, while the side panel exposes every instance

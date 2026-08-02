@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from enum import StrEnum
 from typing import Any, cast
 
 from pydantic import Field
 
+from salvi.application.defaults import default_configuration_for_search_family
 from salvi.components.catalog import (
     ComponentDescription,
     RolePresentation,
@@ -25,7 +27,7 @@ from salvi.components.contracts import (
 from salvi.components.defaults import default_component_registry
 from salvi.components.protocols import Component, ComponentKind, EvaluationExecutor
 from salvi.components.registry import ComponentRegistration, ComponentRegistry
-from salvi.domain.enums import PatternKind
+from salvi.domain.enums import PatternKind, SearchFamily
 from salvi.domain.models import FrozenModel
 
 
@@ -65,9 +67,18 @@ class CompositionResolution(FrozenModel):
     valid: bool
     complete: bool
     allowed_patterns: tuple[PatternKind, ...]
+    search_family: SearchFamily | None = None
     roles: tuple[RoleResolution, ...]
     workflow_connections: tuple[WorkflowConnectionResolution, ...] = ()
     errors: tuple[str, ...] = ()
+
+
+class CompositionTransition(FrozenModel):
+    """Result of changing the architecture family of a draft pipeline."""
+
+    configuration: dict[str, Any]
+    resolution: CompositionResolution
+    changed_roles: tuple[ComponentKind, ...]
 
 
 _ROLE_PATHS = {role.kind: role.configuration_path for role in role_catalog()}
@@ -178,6 +189,57 @@ class CompositionResolutionService:
     def __init__(self, registry: ComponentRegistry | None = None) -> None:
         self._registry = registry or default_component_registry()
 
+    def switch_search_family(
+        self,
+        draft: Mapping[str, Any],
+        family: SearchFamily,
+    ) -> CompositionTransition:
+        """Replace family-specific topology while preserving scientific choices."""
+
+        before = {
+            kind: tuple(specification.get("name") for specification in _specifications(draft, kind))
+            for kind in ComponentKind
+        }
+        target = default_configuration_for_search_family(family)
+        current_search = draft.get("search")
+        target_search = cast(dict[str, Any], target["search"])
+        if isinstance(current_search, Mapping):
+            for key in ("objectives", "constraints", "termination"):
+                if key in current_search:
+                    target_search[key] = deepcopy(current_search[key])
+
+        transitioned = deepcopy(dict(draft))
+        transitioned["search"] = target_search
+        target_monitoring = cast(dict[str, Any], target["monitoring"])
+        current_monitoring = draft.get("monitoring")
+        if isinstance(current_monitoring, Mapping) and "queue_capacity" in current_monitoring:
+            target_monitoring["queue_capacity"] = deepcopy(current_monitoring["queue_capacity"])
+        transitioned["monitoring"] = target_monitoring
+
+        default_engine = self._registry.default_search_engine(family)
+        engine_specification = cast(dict[str, Any], target_search["engine"])
+        if engine_specification.get("name") != default_engine.name:
+            engine_specification["name"] = default_engine.name
+            engine_specification["parameters"] = self._registry.resolve_parameters(
+                ComponentKind.SEARCH_ENGINE,
+                default_engine.name,
+                {},
+            )
+
+        resolution = self.resolve(transitioned)
+        after = {
+            kind: tuple(
+                specification.get("name") for specification in _specifications(transitioned, kind)
+            )
+            for kind in ComponentKind
+        }
+        changed = tuple(kind for kind in ComponentKind if before[kind] != after[kind])
+        return CompositionTransition(
+            configuration=transitioned,
+            resolution=resolution,
+            changed_roles=changed,
+        )
+
     def resolve(self, draft: Mapping[str, Any]) -> CompositionResolution:
         patterns = _patterns(draft)
         specs = {kind: _specifications(draft, kind) for kind in ComponentKind}
@@ -229,9 +291,11 @@ class CompositionResolutionService:
 
         engine_names = names[ComponentKind.SEARCH_ENGINE]
         contract = None
+        search_family = None
         if len(engine_names) == 1:
             registration = registrations.get((ComponentKind.SEARCH_ENGINE, engine_names[0]))
             contract = None if registration is None else registration.composition_contract
+            search_family = None if contract is None else contract.search_family
         elif len(engine_names) > 1:
             errors.append("only one search engine can be configured")
 
@@ -317,6 +381,16 @@ class CompositionResolutionService:
             instance_results: list[InstanceResolution] = []
             for registration in self._registry.describe(role.kind):
                 reasons: list[str] = []
+                if (
+                    role.kind is ComponentKind.SEARCH_ENGINE
+                    and search_family is not None
+                    and registration.composition_contract is not None
+                    and registration.composition_contract.search_family is not search_family
+                ):
+                    reasons.append(
+                        "belongs to the "
+                        f"{registration.composition_contract.search_family.value} search family"
+                    )
                 unsupported = set(patterns) - registration.supported_patterns
                 if unsupported:
                     reasons.append(
@@ -412,6 +486,7 @@ class CompositionResolutionService:
             valid=not errors and all(role.state is not RoleState.INVALID for role in role_results),
             complete=complete and not errors,
             allowed_patterns=patterns,
+            search_family=search_family,
             roles=resolved_roles,
             workflow_connections=_effective_workflow_connections(resolved_roles),
             errors=tuple(dict.fromkeys(errors)),
@@ -421,6 +496,7 @@ class CompositionResolutionService:
 __all__ = [
     "CompositionResolution",
     "CompositionResolutionService",
+    "CompositionTransition",
     "InstanceResolution",
     "RoleResolution",
     "RoleState",

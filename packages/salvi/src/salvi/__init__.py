@@ -12,7 +12,7 @@ from salvi.application.configuration import (
 )
 from salvi.application.run_service import RunService
 from salvi.application.selection_service import FinalSelectionResult, FinalSelectionService
-from salvi.domain.enums import ObjectiveDirection, PatternKind
+from salvi.domain.enums import ObjectiveDirection, PatternKind, SearchFamily
 from salvi.domain.models import (
     Bicluster,
     Candidate,
@@ -84,6 +84,7 @@ __all__ = [
     "SalviRun",
     "ScientificEvaluationBatch",
     "ScientificEvaluationService",
+    "SearchFamily",
     "__version__",
     "bind_pipeline",
     "jaccard_distance",

@@ -55,8 +55,8 @@ export function ObserverMetricPanel({
     return <RunProgress metrics={metrics} view={view} budget={evaluationBudget} />;
   }
   if (view.view_kind === "TABLE") return <MetricTable metrics={metrics} view={view} />;
-  if (view.view_kind === "HEATMAP") {
-    return <ArchiveHeatmap metrics={metrics} axes={archiveAxes} view={view} />;
+  if (view.view_kind === "QD_DIAGNOSTICS") {
+    return <QdArchiveDiagnostics metrics={metrics} axes={archiveAxes} view={view} />;
   }
   if (view.view_kind === "DISTRIBUTION") {
     return (
@@ -647,7 +647,7 @@ interface ArchiveCellMetric {
   value: number;
 }
 
-function ArchiveHeatmap({
+function QdArchiveDiagnostics({
   metrics,
   axes,
   view
@@ -677,6 +677,226 @@ function ArchiveHeatmap({
       }),
     [latest]
   );
+  return cells.length > 0 ? (
+    <QdCellHeatmap metrics={metrics} axes={axes} view={view} cells={cells} />
+  ) : (
+    <QdCellSummary metrics={metrics} view={view} />
+  );
+}
+
+function QdCellSummary({ metrics, view }: { metrics: Metric[]; view: ObserverView }) {
+  const latest = useMemo(() => [...latestMetricsByName(metrics).values()], [metrics]);
+  const distributions = useMemo(
+    () =>
+      [
+        ...new Set(
+          metrics.flatMap((metric) => {
+            const item = distributionName(metric.name);
+            return item?.name.startsWith("qd.cell_") ? [item.name] : [];
+          })
+        )
+      ],
+    [metrics]
+  );
+  const preferred = "qd.cell_acceptance_ratio";
+  const [selected, setSelected] = useState(
+    distributions.includes(preferred) ? preferred : distributions[0] ?? ""
+  );
+  useEffect(() => {
+    if (!distributions.includes(selected)) {
+      setSelected(distributions.includes(preferred) ? preferred : distributions[0] ?? "");
+    }
+  }, [distributions, selected]);
+  const points = distributionPoints(metrics, selected);
+  if (!selected || points.length === 0) return <MetricTable metrics={metrics} view={view} />;
+
+  const definition = metricPresentation(`${selected}.mean`, view.metrics);
+  const ratio = definition?.unit === "ratio";
+  const summary = latest.filter((metric) =>
+    ["qd.visited_cells", "qd.unmapped_attempts"].includes(metric.name)
+  );
+  const zoomed = points.length > 40;
+  return (
+    <div className="metric-panel-content">
+      <div className="heatmap-toolbar">
+        <div className="metric-kpis compact">
+          {summary.map((metric) => (
+            <div key={metric.name}>
+              <small>{seriesLabel(metric.name, view.metrics)}</small>
+              <strong>{metric.value.toFixed(0)}</strong>
+            </div>
+          ))}
+        </div>
+        <label className="visualization-control">
+          <span>Cell summary</span>
+          <select value={selected} onChange={(event) => setSelected(event.target.value)}>
+            {distributions.map((name) => (
+              <option value={name} key={name}>
+                {humanizeMetricName(name, "qd")}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {definition ? (
+        <MetricDescription
+          view={view}
+          group={definition.display_group}
+          definition={definition}
+        />
+      ) : null}
+      <Chart
+        height={zoomed ? 360 : 330}
+        option={{
+          animation: false,
+          tooltip: {
+            trigger: "axis",
+            formatter: (parameters: unknown) =>
+              qdSummaryTooltip(parameters, points, ratio, definition?.unit ?? "value")
+          },
+          legend: {
+            bottom: 0,
+            data: ["Minimum to maximum", "Interquartile range", "Median", "Mean"]
+          },
+          grid: {
+            top: 18,
+            right: 28,
+            bottom: zoomed ? 106 : 74,
+            left: 72,
+            containLabel: true
+          },
+          xAxis: {
+            type: "category",
+            data: points.map((point) => String(point.step)),
+            name: "Evaluations",
+            nameLocation: "middle",
+            nameGap: 32,
+            nameTextStyle: { color: "#66736e" }
+          },
+          yAxis: {
+            type: "value",
+            name: definition?.label ?? "Cell metric",
+            nameLocation: "middle",
+            nameGap: 52,
+            nameTextStyle: { color: "#66736e" },
+            axisLabel: ratio
+              ? { formatter: (value: number) => `${(value * 100).toFixed(0)}%` }
+              : undefined,
+            scale: true
+          },
+          dataZoom: zoomed
+            ? [
+                { type: "inside", start: 0, end: 100 },
+                { type: "slider", height: 14, bottom: 36, start: 0, end: 100 }
+              ]
+            : undefined,
+          series: [
+            {
+              name: "Minimum baseline",
+              type: "line",
+              stack: "full-range",
+              symbol: "none",
+              silent: true,
+              lineStyle: { opacity: 0 },
+              areaStyle: { opacity: 0 },
+              data: points.map((point) => point.minimum)
+            },
+            {
+              name: "Minimum to maximum",
+              type: "line",
+              stack: "full-range",
+              symbol: "none",
+              silent: true,
+              lineStyle: { opacity: 0 },
+              areaStyle: { color: "#d8ebe8", opacity: 0.55 },
+              data: points.map((point) => point.maximum - point.minimum)
+            },
+            {
+              name: "Quartile baseline",
+              type: "line",
+              stack: "quartile-range",
+              symbol: "none",
+              silent: true,
+              lineStyle: { opacity: 0 },
+              areaStyle: { opacity: 0 },
+              data: points.map((point) => point.firstQuartile)
+            },
+            {
+              name: "Interquartile range",
+              type: "line",
+              stack: "quartile-range",
+              symbol: "none",
+              silent: true,
+              lineStyle: { opacity: 0 },
+              areaStyle: { color: "#75bdb4", opacity: 0.55 },
+              data: points.map((point) => point.thirdQuartile - point.firstQuartile)
+            },
+            {
+              name: "Median",
+              type: "line",
+              symbol: "none",
+              lineStyle: { color: colors[0], width: 2 },
+              itemStyle: { color: colors[0] },
+              data: points.map((point) => point.median)
+            },
+            {
+              name: "Mean",
+              type: "line",
+              symbol: "none",
+              lineStyle: { color: colors[1], width: 2, type: "dashed" },
+              itemStyle: { color: colors[1] },
+              data: points.map((point) => point.mean)
+            }
+          ]
+        }}
+      />
+    </div>
+  );
+}
+
+function qdSummaryTooltip(
+  parameters: unknown,
+  points: DistributionPoint[],
+  ratio: boolean,
+  unit: string
+): string {
+  if (!Array.isArray(parameters) || parameters.length === 0) return "";
+  const first = parameters[0];
+  if (
+    typeof first !== "object" ||
+    first === null ||
+    !("dataIndex" in first) ||
+    typeof first.dataIndex !== "number"
+  ) {
+    return "";
+  }
+  const point = points[first.dataIndex];
+  if (!point) return "";
+  const value = (raw: number) =>
+    ratio ? `${(raw * 100).toFixed(1)}%` : `${raw.toFixed(2)} ${unit}`;
+  return [
+    `<strong>Evaluation ${point.step.toLocaleString()}</strong>`,
+    `Minimum: ${value(point.minimum)}`,
+    `First quartile: ${value(point.firstQuartile)}`,
+    `Median: ${value(point.median)}`,
+    `Mean: ${value(point.mean)}`,
+    `Third quartile: ${value(point.thirdQuartile)}`,
+    `Maximum: ${value(point.maximum)}`
+  ].join("<br/>");
+}
+
+function QdCellHeatmap({
+  metrics,
+  axes,
+  view,
+  cells
+}: {
+  metrics: Metric[];
+  axes: string[];
+  view: ObserverView;
+  cells: ArchiveCellMetric[];
+}) {
+  const latest = useMemo(() => [...latestMetricsByName(metrics).values()], [metrics]);
   const measures = useMemo(() => [...new Set(cells.map((item) => item.measure))], [cells]);
   const [measure, setMeasure] = useState(
     measures.includes("acceptance_ratio") ? "acceptance_ratio" : measures[0] ?? ""
@@ -686,7 +906,7 @@ function ArchiveHeatmap({
       setMeasure(measures.includes("acceptance_ratio") ? "acceptance_ratio" : measures[0] ?? "");
     }
   }, [measure, measures]);
-  if (!measure || cells.length === 0) return <MetricTable metrics={metrics} view={view} />;
+  if (!measure) return <MetricTable metrics={metrics} view={view} />;
   const selectedCells = cells.filter((cell) => cell.measure === measure);
   const definition = metricPresentation(`qd.cell.0_0.${measure}`, view.metrics);
   const xBins = [...new Set(selectedCells.map((cell) => cell.coordinate[0]))].sort((a, b) => a - b);

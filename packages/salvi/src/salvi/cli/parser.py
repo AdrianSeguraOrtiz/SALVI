@@ -52,8 +52,8 @@ def _add_dataset_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--seed",
         type=_non_negative_integer,
-        default=0,
-        help="random seed used for dataset-dependent component setup",
+        default=42,
+        help="random seed used for dataset-dependent component setup (default: 42)",
     )
 
 

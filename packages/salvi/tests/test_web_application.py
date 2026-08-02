@@ -15,13 +15,14 @@ from fastapi.testclient import TestClient
 from salvi.application.composition import CompositionResolutionService, RoleState
 from salvi.application.configuration import (
     PipelineConfiguration,
+    load_pipeline_configuration,
     parse_pipeline_configuration,
     serialize_pipeline_configuration,
 )
 from salvi.application.defaults import default_scientific_configuration
 from salvi.components.catalog import WorkflowConnectionKind, WorkflowStage, role_catalog
 from salvi.components.defaults import default_component_registry
-from salvi.domain.enums import ColumnKind, RunStatus
+from salvi.domain.enums import ColumnKind, RunStatus, SearchFamily
 from salvi.exceptions import ConfigurationError, ConversionError, RunCancelledError
 from salvi.web.adapters import (
     DatasetBundleZipAdapter,
@@ -46,6 +47,13 @@ def test_pipeline_text_api_round_trips_the_cli_model() -> None:
     assert parse_pipeline_configuration(serialized) == configuration
 
 
+def test_public_default_matches_the_scientific_example() -> None:
+    example = Path(__file__).resolve().parents[3] / "examples" / "scientific-configuration.yaml"
+    expected = load_pipeline_configuration(example).pipeline
+    actual = PipelineConfiguration.model_validate(default_scientific_configuration())
+    assert actual == expected
+
+
 def test_default_pipeline_uses_cell_compartmentalized_qd_components() -> None:
     configuration = PipelineConfiguration.model_validate(default_scientific_configuration())
     assert configuration.evaluation.candidate_validity.parameters == {
@@ -66,7 +74,13 @@ def test_default_pipeline_uses_cell_compartmentalized_qd_components() -> None:
     assert configuration.search.scheduler.name == "cell_balanced_adaptive_credit"
     assert configuration.search.termination.parameters["max_evaluations"] == 50_000
     assert configuration.final_selection is not None
-    assert configuration.final_selection.name == "containment_marginal_quality"
+    assert configuration.final_selection.name == "adaptive_residual_evidence_cover"
+    assert configuration.final_selection.parameters["objective_names"] == [
+        "internal_coherence",
+        "contrast",
+    ]
+    assert configuration.final_selection.parameters["minimum_quality_floor"] == 0.5
+    assert configuration.final_selection.parameters["maximum_quality_floor"] == 0.85
     assert tuple(observer.name for observer in configuration.monitoring.observers) == (
         "search_progress",
         "archive_coverage",
@@ -143,13 +157,53 @@ def test_partial_resolution_changes_roles_with_the_search_engine() -> None:
     search["crossover"] = None
     nsga = service.resolve(draft)
     emitter = next(role for role in nsga.roles if role.role.kind.value == "emitter")
+    descriptors = next(role for role in nsga.roles if role.role.kind.value == "descriptor")
     crossover = next(role for role in nsga.roles if role.role.kind.value == "crossover_operator")
     observers = next(role for role in nsga.roles if role.role.kind.value == "observer")
     assert emitter.state is RoleState.INVALID
+    assert descriptors.state is RoleState.INVALID
+    assert descriptors.maximum == 0
     assert crossover.state is RoleState.REQUIRED
     assert observers.state is RoleState.INVALID
     assert "archive_coverage still requires: archive" in observers.reasons
     assert "emitter_credit still requires: scheduler" in observers.reasons
+
+
+def test_search_family_transition_builds_complete_family_specific_topologies() -> None:
+    service = CompositionResolutionService()
+    original = default_scientific_configuration()
+
+    conventional = service.switch_search_family(
+        original,
+        SearchFamily.CONVENTIONAL_MULTI_OBJECTIVE,
+    )
+    assert conventional.resolution.complete
+    assert conventional.resolution.search_family is SearchFamily.CONVENTIONAL_MULTI_OBJECTIVE
+    search = conventional.configuration["search"]
+    assert search["engine"]["name"] == "pymoo_nsga2"
+    assert search["descriptors"] == []
+    assert search["archive"] is None
+    assert search["emitters"] == []
+    assert search["crossover"]["name"] == "half_uniform_membership"
+    assert search["mutation"]["name"] == "bit_flip_membership"
+    engine = next(
+        role for role in conventional.resolution.roles if role.role.kind.value == "search_engine"
+    )
+    engines = {instance.component.name: instance for instance in engine.instances}
+    assert engines["pymoo_nsga2"].available
+    assert not engines["serial_mome"].available
+    assert "QUALITY_DIVERSITY" in engines["serial_mome"].reasons[0]
+
+    quality_diversity = service.switch_search_family(
+        conventional.configuration,
+        SearchFamily.QUALITY_DIVERSITY,
+    )
+    assert quality_diversity.resolution.complete
+    assert quality_diversity.resolution.search_family is SearchFamily.QUALITY_DIVERSITY
+    qd_search = quality_diversity.configuration["search"]
+    assert qd_search["engine"]["name"] == "serial_mome"
+    assert len(qd_search["descriptors"]) == 2
+    assert qd_search["archive"]["name"] == "deep_grid_mome"
 
 
 def test_partial_resolution_exposes_runtime_and_observer_incompatibilities() -> None:
@@ -599,6 +653,10 @@ def test_web_api_imports_csv_and_serves_catalog_and_static_assets(tmp_path: Path
             "OUTPUT",
             "ANALYSIS",
         ]
+        assert {item["family"]: item["default_engine"] for item in catalog["search_families"]} == {
+            "QUALITY_DIVERSITY": "serial_mome",
+            "CONVENTIONAL_MULTI_OBJECTIVE": "pymoo_nsga2",
+        }
         assert catalog["analyses"] == []
         candidate_outcomes = next(
             item
@@ -609,6 +667,12 @@ def test_web_api_imports_csv_and_serves_catalog_and_static_assets(tmp_path: Path
         assert outcome_view["view_kind"] == "STACKED_SERIES"
         assert {metric["temporal_scope"] for metric in outcome_view["metrics"]} == {"WINDOW"}
         assert {metric["unit"] for metric in outcome_view["metrics"]} == {"ratio"}
+        qd_diagnostics = next(
+            item
+            for item in catalog["components"]
+            if item["kind"] == "observer" and item["name"] == "qd_archive_diagnostics"
+        )
+        assert qd_diagnostics["observer_view"]["view_kind"] == "QD_DIAGNOSTICS"
         response = client.post(
             "/api/v1/imports/csv",
             data={"identifier": "browser-data", "slot_names": '["data"]'},
@@ -649,6 +713,19 @@ def test_web_api_validates_pipeline_text_and_upload_boundaries(tmp_path: Path) -
             json={"configuration": validated.json()["configuration"]},
         )
         assert resolved.json()["complete"]
+        assert resolved.json()["search_family"] == "QUALITY_DIVERSITY"
+        transitioned = client.post(
+            "/api/v1/pipelines/search-family",
+            json={
+                "configuration": validated.json()["configuration"],
+                "search_family": "CONVENTIONAL_MULTI_OBJECTIVE",
+            },
+        )
+        assert transitioned.status_code == 200
+        transition = transitioned.json()
+        assert transition["resolution"]["complete"]
+        assert transition["resolution"]["search_family"] == "CONVENTIONAL_MULTI_OBJECTIVE"
+        assert transition["configuration"]["search"]["descriptors"] == []
         assert (
             client.post(
                 "/api/v1/pipelines/validate",
@@ -876,6 +953,16 @@ def test_web_api_runs_one_small_parallel_search_in_a_spawned_process(tmp_path: P
     search["termination"] = {
         "name": "evaluation_budget",
         "parameters": {"max_evaluations": 8},
+    }
+    pipeline["final_selection"] = {
+        "name": "adaptive_residual_evidence_cover",
+        "parameters": {
+            "objective_names": ["internal_coherence", "contrast"],
+            "complexity_penalty": 0.0,
+            "minimum_marginal_evidence": 0.0,
+            "minimum_quality_floor": 0.0,
+            "maximum_quality_floor": 0.0,
+        },
     }
     monitoring = pipeline["monitoring"]
     assert isinstance(monitoring, dict)
@@ -1168,14 +1255,24 @@ def test_process_signal_and_worker_outcome_fallbacks(
         "salvi.web.run_manager.RunService.run_pipeline",
         lambda _self, _path, parsed, cancellation: called.append(parsed.identifier),
     )
-    _run_child(str(tmp_path / "pipeline.yaml"), binding, event)  # type: ignore[arg-type]
+    worker_error_path = tmp_path / "worker-error.json"
+    _run_child(  # type: ignore[arg-type]
+        str(tmp_path / "pipeline.yaml"), binding, event, str(worker_error_path)
+    )
     assert called == ["child"]
+    assert not worker_error_path.exists()
     monkeypatch.setattr(
         "salvi.web.run_manager.RunService.run_pipeline",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("failed")),
     )
     with pytest.raises(SystemExit):
-        _run_child(str(tmp_path / "pipeline.yaml"), binding, event)  # type: ignore[arg-type]
+        _run_child(  # type: ignore[arg-type]
+            str(tmp_path / "pipeline.yaml"), binding, event, str(worker_error_path)
+        )
+    worker_error = json.loads(worker_error_path.read_text(encoding="utf-8"))
+    assert worker_error["error_type"] == "RuntimeError"
+    assert worker_error["message"] == "failed"
+    assert "RuntimeError: failed" in worker_error["traceback"]
 
     record = WebRunRecord(
         identifier="run",
@@ -1185,11 +1282,18 @@ def test_process_signal_and_worker_outcome_fallbacks(
         status=RunStatus.RUNNING,
         started_at=datetime.now(UTC),
     )
+    record.pipeline_path.parent.mkdir(parents=True)
+    worker_error_path.replace(record.pipeline_path.parent / "worker-error.json")
     status, error, started_at, finished_at = WebRunManager._read_outcome(record, 1)
     assert status is RunStatus.FAILED
-    assert "code 1" in str(error)
+    assert error == "RuntimeError: failed"
     assert started_at is None
     assert finished_at is not None
+
+    (record.pipeline_path.parent / "worker-error.json").unlink()
+    status, error, _, _ = WebRunManager._read_outcome(record, 1)
+    assert status is RunStatus.FAILED
+    assert "code 1" in str(error)
 
     record.output_directory.mkdir(parents=True)
     now = datetime.now(UTC)

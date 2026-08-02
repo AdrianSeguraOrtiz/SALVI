@@ -32,7 +32,13 @@ class ResourceUsageObserverConfiguration(DistributionObserverConfiguration):
 
 
 class QDArchiveDiagnosticsObserverConfiguration(DistributionObserverConfiguration):
-    include_cell_metrics: bool = False
+    include_cell_metrics: bool = Field(
+        default=False,
+        description=(
+            "Persist exact metrics for every visited cell so a two-dimensional archive can "
+            "be rendered as a heatmap; otherwise persist bounded distribution summaries."
+        ),
+    )
 
 
 _RETAINED_ARCHIVE_STATUSES = frozenset({"INSERTED", "INSERTED_WITH_EVICTIONS"})

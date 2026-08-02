@@ -43,6 +43,7 @@ const emptyCatalog: Catalog = {
   workflow_stages: [],
   roles: [],
   components: [],
+  search_families: [],
   patterns: [],
   input_adapters: [],
   analyses: []
@@ -62,6 +63,8 @@ const searchProgress: ComponentDescription = {
   parameters: [],
   stage: "SEARCH",
   order: 0,
+  search_family: null,
+  default_for_search_family: false,
   observer_view: {
     view_kind: "KPI_SERIES",
     title: "Search progress",

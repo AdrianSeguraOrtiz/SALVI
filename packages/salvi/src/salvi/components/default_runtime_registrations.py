@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import cast
 
+from pydantic import BaseModel
+
 from salvi.components.catalog import ComponentMaturity
 from salvi.components.configuration import EmptyConfiguration
 from salvi.components.default_registration import (
@@ -41,9 +43,31 @@ from salvi.components.observers import (
 )
 from salvi.components.protocols import ComponentKind
 from salvi.components.registry import ComponentRegistration
+from salvi.components.residual_selection import (
+    AdaptiveResidualEvidenceCoverConfiguration,
+    AdaptiveResidualEvidenceCoverSelector,
+)
 from salvi.components.termination import EvaluationBudget, TerminationConfiguration
 from salvi.engine.mome import SerialMomeConfiguration, SerialMomeSearchEngine
 from salvi.engine.pymoo import PymooNsga2Configuration, PymooNsga2SearchEngine
+
+
+def _adaptive_residual_selector(config: BaseModel) -> AdaptiveResidualEvidenceCoverSelector:
+    typed = cast(AdaptiveResidualEvidenceCoverConfiguration, config)
+    return AdaptiveResidualEvidenceCoverSelector(
+        objective_names=typed.objective_names,
+        quality_scale=typed.quality_scale,
+        overlap_penalty=typed.overlap_penalty,
+        low_quality_penalty=typed.low_quality_penalty,
+        complexity_penalty=typed.complexity_penalty,
+        minimum_marginal_evidence=typed.minimum_marginal_evidence,
+        maximum_dense_cells=typed.maximum_dense_cells,
+        minimum_quality_floor=typed.minimum_quality_floor,
+        maximum_quality_floor=typed.maximum_quality_floor,
+        minimum_candidates_for_knee=typed.minimum_candidates_for_knee,
+        minimum_knee_prominence=typed.minimum_knee_prominence,
+        fallback_quality_quantile=typed.fallback_quality_quantile,
+    )
 
 
 def default_runtime_registrations() -> tuple[ComponentRegistration, ...]:
@@ -216,6 +240,12 @@ def default_runtime_registrations() -> tuple[ComponentRegistration, ...]:
             ),
         ),
         _registration(
+            ComponentKind.FINAL_SELECTOR,
+            "adaptive_residual_evidence_cover",
+            AdaptiveResidualEvidenceCoverConfiguration,
+            _adaptive_residual_selector,
+        ),
+        _registration(
             ComponentKind.SEARCH_ENGINE,
             "serial_mome",
             SerialMomeConfiguration,
@@ -225,6 +255,7 @@ def default_runtime_registrations() -> tuple[ComponentRegistration, ...]:
                 ).initial_population_size,
                 configured_batch_size=cast(SerialMomeConfiguration, config).batch_size,
             ),
+            default_for_search_family=True,
         ),
         _registration(
             ComponentKind.SEARCH_ENGINE,
@@ -243,6 +274,7 @@ def default_runtime_registrations() -> tuple[ComponentRegistration, ...]:
                 "Checkpoint resumption is not supported.",
             ),
             maturity=ComponentMaturity.EXPERIMENTAL,
+            default_for_search_family=True,
         ),
     )
 

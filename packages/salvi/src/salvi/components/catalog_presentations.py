@@ -160,6 +160,10 @@ _COMPONENT_DESCRIPTIONS: dict[tuple[ComponentKind, str], str] = {
         "Traverses exact containment chains and retains the largest nested bicluster before "
         "its normalized objective degradation becomes material."
     ),
+    (ComponentKind.FINAL_SELECTOR, "adaptive_residual_evidence_cover"): (
+        "Greedily selects compact, complementary biclusters by their unexplained "
+        "quality-weighted matrix evidence and adapts its quality floor to the repertoire."
+    ),
     (ComponentKind.INITIALIZER, "uniform_random"): (
         "Samples initial row and column memberships uniformly over valid cardinalities."
     ),
@@ -224,7 +228,8 @@ _COMPONENT_DESCRIPTIONS: dict[tuple[ComponentKind, str], str] = {
         "individual evaluations, output, and observers."
     ),
     (ComponentKind.OBSERVER, "qd_archive_diagnostics"): (
-        "Tracks QD-cell visits, acceptance, turnover, and stagnation during search."
+        "Tracks QD-cell visits, acceptance, turnover, and stagnation as bounded temporal "
+        "summaries or an optional exact two-dimensional cell map."
     ),
     (ComponentKind.SCHEDULER, "first"): (
         "Allocates every emission request to the first configured emitter."
@@ -349,6 +354,34 @@ _PARAMETER_DESCRIPTIONS: dict[str, str] = {
     "max_degradation_per_log_area_gain": (
         "Largest normalized objective loss per logarithmic bicluster-area gain accepted along "
         "a containment chain."
+    ),
+    "quality_scale": (
+        "Interpret selected objectives directly on the unit interval or normalize them "
+        "empirically within the terminal repertoire."
+    ),
+    "overlap_penalty": "Penalty applied to evidence already explained by selected biclusters.",
+    "low_quality_penalty": (
+        "Penalty applied to observed cells whose column quality falls below the adaptive floor."
+    ),
+    "complexity_penalty": (
+        "Weight of the combinatorial row-and-column membership complexity penalty."
+    ),
+    "minimum_marginal_evidence": (
+        "Minimum positive residual-evidence gain required to retain another bicluster."
+    ),
+    "maximum_dense_cells": (
+        "Largest prepared matrix stored as a dense coverage map before using sparse storage."
+    ),
+    "minimum_quality_floor": "Lower bound for the run-adaptive objective-quality floor.",
+    "maximum_quality_floor": "Upper bound for the run-adaptive objective-quality floor.",
+    "minimum_candidates_for_knee": (
+        "Minimum unique feasible structures required before estimating a quality knee."
+    ),
+    "minimum_knee_prominence": (
+        "Minimum two-sided prominence required to accept a detected quality transition."
+    ),
+    "fallback_quality_quantile": (
+        "Quality quantile used when the repertoire has no sufficiently prominent knee."
     ),
 }
 

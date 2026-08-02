@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import Field
 
 from salvi.components.protocols import ComponentKind
-from salvi.domain.enums import PatternKind
+from salvi.domain.enums import PatternKind, SearchFamily
 from salvi.domain.models import FrozenModel
 
 
@@ -50,7 +50,7 @@ class ObserverViewKind(StrEnum):
     DISTRIBUTION = "DISTRIBUTION"
     GROUPED_SERIES = "GROUPED_SERIES"
     STACKED_SERIES = "STACKED_SERIES"
-    HEATMAP = "HEATMAP"
+    QD_DIAGNOSTICS = "QD_DIAGNOSTICS"
     TABLE = "TABLE"
 
 
@@ -96,6 +96,16 @@ class WorkflowStagePresentation(FrozenModel):
     icon: str = Field(min_length=1)
     theme: str = Field(min_length=1)
     preferred_columns: int = Field(default=1, ge=1)
+
+
+class SearchFamilyPresentation(FrozenModel):
+    """Catalog metadata for one family of search-engine architectures."""
+
+    family: SearchFamily
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    order: int = Field(ge=0)
+    default_engine: str = Field(min_length=1)
 
 
 class RolePresentation(FrozenModel):
@@ -186,6 +196,8 @@ class ComponentDescription(FrozenModel):
     parameters: tuple[ComponentParameterDescription, ...]
     stage: WorkflowStage
     order: int = Field(ge=0)
+    search_family: SearchFamily | None = None
+    default_for_search_family: bool = False
     observer_view: ObserverPresentation | None = None
 
 
@@ -203,6 +215,7 @@ __all__ = [
     "ObserverViewKind",
     "ParameterWidget",
     "RolePresentation",
+    "SearchFamilyPresentation",
     "WorkflowConnection",
     "WorkflowConnectionKind",
     "WorkflowStage",

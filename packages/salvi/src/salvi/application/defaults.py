@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
+
+from salvi.domain.enums import SearchFamily
 
 
 def default_scientific_configuration() -> dict[str, Any]:
@@ -247,13 +250,110 @@ def default_scientific_configuration() -> dict[str, Any]:
             ],
         },
         "final_selection": {
-            "name": "containment_marginal_quality",
+            "name": "adaptive_residual_evidence_cover",
             "parameters": {
-                "max_objective_degradation": 0.15,
-                "max_degradation_per_log_area_gain": 0.20,
+                "objective_names": ["internal_coherence", "contrast"],
+                "quality_scale": "unit_interval",
+                "overlap_penalty": 0.50,
+                "low_quality_penalty": 0.50,
+                "complexity_penalty": 0.25,
+                "minimum_marginal_evidence": 1.0,
+                "maximum_dense_cells": 10_000_000,
+                "minimum_quality_floor": 0.50,
+                "maximum_quality_floor": 0.85,
+                "minimum_candidates_for_knee": 8,
+                "minimum_knee_prominence": 0.05,
+                "fallback_quality_quantile": 0.50,
             },
         },
     }
 
 
-__all__ = ["default_scientific_configuration"]
+def default_configuration_for_search_family(family: SearchFamily) -> dict[str, Any]:
+    """Return the complete built-in architecture for one search family."""
+
+    configuration = default_scientific_configuration()
+    if family is SearchFamily.QUALITY_DIVERSITY:
+        return configuration
+
+    if family is not SearchFamily.CONVENTIONAL_MULTI_OBJECTIVE:
+        raise ValueError(f"unsupported search family: {family.value}")
+
+    search = configuration["search"]
+    search.update(
+        {
+            "engine": {
+                "name": "pymoo_nsga2",
+                "parameters": {
+                    "population_size": 64,
+                    "eliminate_duplicates": True,
+                },
+            },
+            "descriptors": [],
+            "archive": None,
+            "parent_selection": None,
+            "mate_selection": None,
+            "crossover": {
+                "name": "half_uniform_membership",
+                "parameters": {
+                    "application_probability": 0.9,
+                    "row_exchange_probability": 0.5,
+                    "column_exchange_probability": 0.5,
+                },
+            },
+            "mutation": {
+                "name": "bit_flip_membership",
+                "parameters": {
+                    "application_probability": 1.0,
+                    "bit_probability": None,
+                },
+            },
+            "initialization": {
+                "name": "pattern_aware",
+                "parameters": {
+                    "cardinality_levels": 8,
+                    "joint_column_candidate_pool_size": 32,
+                },
+            },
+            "emitters": [],
+            "scheduler": None,
+        }
+    )
+    monitoring = configuration["monitoring"]
+    monitoring["checkpoint_interval_evaluations"] = None
+    monitoring["observers"] = [
+        {"name": "search_progress", "parameters": {}},
+        {
+            "name": "component_timing",
+            "parameters": {"every_evaluations": 1_000},
+        },
+        {
+            "name": "evaluation_issues",
+            "parameters": {"every_evaluations": 1_000},
+        },
+        {
+            "name": "objective_distribution",
+            "parameters": {"every_evaluations": 1_000},
+        },
+        {
+            "name": "candidate_diversity",
+            "parameters": {
+                "window_size": 512,
+                "distance_sample_size": 128,
+                "row_weight": 0.5,
+                "every_evaluations": 1_000,
+            },
+        },
+        {"name": "runtime_throughput", "parameters": {}},
+        {
+            "name": "resource_usage",
+            "parameters": {"every_evaluations": 1_000},
+        },
+    ]
+    return deepcopy(configuration)
+
+
+__all__ = [
+    "default_configuration_for_search_family",
+    "default_scientific_configuration",
+]

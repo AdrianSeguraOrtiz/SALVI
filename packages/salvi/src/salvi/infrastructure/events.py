@@ -26,17 +26,21 @@ class SQLiteEventStore:
 
     def __init__(self, path: Path, *, initialize: bool = True) -> None:
         self.path = path.resolve()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._read_only = not initialize
+        if initialize:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.Lock()
         self._write_connection: sqlite3.Connection | None = None
         if initialize:
             self._initialize()
 
     def _connect(self, *, shared_writer: bool = False) -> sqlite3.Connection:
+        database = f"{self.path.as_uri()}?mode=ro" if self._read_only else str(self.path)
         connection = sqlite3.connect(
-            self.path,
+            database,
             timeout=30.0,
             check_same_thread=not shared_writer,
+            uri=self._read_only,
         )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
@@ -48,9 +52,11 @@ class SQLiteEventStore:
         connection = self._connect()
         try:
             yield connection
-            connection.commit()
+            if not self._read_only:
+                connection.commit()
         except Exception:
-            connection.rollback()
+            if connection.in_transaction:
+                connection.rollback()
             raise
         finally:
             connection.close()
@@ -392,16 +398,22 @@ class SQLiteRunEventSource:
             (),
         )
 
-    @staticmethod
     def _while_ready(
+        self,
         operation: Callable[[], _ReadResult],
         empty: _ReadResult,
     ) -> _ReadResult:
+        if not self._store.path.is_file():
+            return empty
         try:
             return operation()
         except sqlite3.OperationalError as error:
             message = str(error).lower()
-            if "no such table" in message or "locked" in message:
+            if (
+                "no such table" in message
+                or "locked" in message
+                or "unable to open database file" in message
+            ):
                 return empty
             raise
 
