@@ -1,0 +1,60 @@
+[tool.uv]
+package = false
+default-groups = ["dev"]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+salvi = { workspace = true }
+salvi-experiments = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.112,<7",
+  "httpx>=0.27,<0.29",
+  "mypy>=1.13,<2",
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<8",
+  "ruff>=0.9,<1",
+  "types-PyYAML>=6.0.12,<7",
+]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+testpaths = ["packages/salvi/tests", "packages/salvi-experiments/tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["packages/salvi/src", "packages/salvi-experiments/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"packages/*/tests/**/*.py" = ["S101"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+packages = ["salvi", "salvi_experiments"]
+mypy_path = ["packages/salvi/src", "packages/salvi-experiments/src"]
+
+[[tool.mypy.overrides]]
+module = ["pyarrow.*", "pymoo.*", "scipy.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+branch = true
+source = ["salvi", "salvi_experiments"]
+omit = [
+  "*/components/protocols.py",
+  "*/patterns/contracts.py",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true

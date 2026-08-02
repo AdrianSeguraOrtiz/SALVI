@@ -50,6 +50,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+playwright-report/
+test-results/
 
 # Translations
 *.mo
@@ -151,6 +153,8 @@ activemq-data/
 .env
 .envrc
 .venv
+.salvi-venv/
+.python-version
 env/
 venv/
 ENV/
@@ -205,6 +209,20 @@ tempCodeRunnerFile.py
 
 # Ruff stuff:
 .ruff_cache/
+
+# Frontend dependencies and generated TypeScript metadata
+node_modules/
+*.tsbuildinfo
+packages/salvi/web-ui/vite.config.js
+packages/salvi/web-ui/vite.config.d.ts
+
+# SALVI example and run outputs
+examples/example-dataset/
+examples/smoke-output/
+examples/scientific-output/
+experiment-results/
+run-output/
+benchmarks/generated/
 
 # PyPI configuration file
 .pypirc
