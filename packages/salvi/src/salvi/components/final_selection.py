@@ -64,7 +64,7 @@ def _selected_objectives(
     missing = tuple(name for name in objective_names if name not in by_name)
     if missing:
         raise ComponentError(
-            f"containment final selection cannot find configured objectives: {', '.join(missing)}"
+            f"final selection cannot find configured objectives: {', '.join(missing)}"
         )
     return tuple(by_name[name] for name in objective_names)
 
@@ -87,12 +87,10 @@ def _validate_objectives(
         return
     expected = _objective_schema(evaluations[0], objective_names)
     if not expected:
-        raise ComponentError("containment final selection requires evaluated objectives")
+        raise ComponentError("final selection requires evaluated objectives")
     for evaluation in evaluations[1:]:
         if _objective_schema(evaluation, objective_names) != expected:
-            raise ComponentError(
-                "containment final selection requires one consistent objective schema"
-            )
+            raise ComponentError("final selection requires one consistent objective schema")
 
 
 def _continuous_utilities(

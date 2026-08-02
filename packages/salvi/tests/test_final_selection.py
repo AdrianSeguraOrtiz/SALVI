@@ -9,9 +9,14 @@ from salvi.components.final_selection import (
     ContainmentMarginalQualityConfiguration,
     ContainmentMarginalQualitySelector,
 )
+from salvi.components.residual_selection import (
+    AdaptiveResidualEvidenceCoverConfiguration,
+    AdaptiveResidualEvidenceCoverSelector,
+)
 from salvi.domain import (
     Bicluster,
     Candidate,
+    ColumnObjectiveValue,
     Evaluation,
     EvaluationIssue,
     EvaluationIssueCode,
@@ -67,6 +72,115 @@ def _evaluation(
         ),
         archive_coordinate=coordinate,
     )
+
+
+def _explained_evaluation(
+    identifier: str,
+    rows: tuple[int, ...],
+    columns: tuple[int, ...],
+    quality: float,
+) -> Evaluation:
+    return Evaluation(
+        candidate=Candidate(
+            identifier=identifier,
+            bicluster=Bicluster(row_indices=rows, column_indices=columns),
+        ),
+        objectives=(
+            ObjectiveValue(
+                name="internal_coherence",
+                value=1.0 - quality,
+                direction=ObjectiveDirection.MINIMIZE,
+                columns=tuple(
+                    ColumnObjectiveValue(column_index=column, value=1.0 - quality)
+                    for column in columns
+                ),
+            ),
+            ObjectiveValue(
+                name="contrast",
+                value=quality,
+                direction=ObjectiveDirection.MAXIMIZE,
+                columns=tuple(
+                    ColumnObjectiveValue(column_index=column, value=quality) for column in columns
+                ),
+            ),
+        ),
+        descriptors=(
+            NamedValue(name="row_cardinality", value=float(len(rows))),
+            NamedValue(name="column_cardinality", value=float(len(columns))),
+        ),
+    )
+
+
+def test_adaptive_residual_selector_keeps_complementary_evidence_and_deduplicates(
+    run_context: RunContext,
+) -> None:
+    repertoire = Repertoire(
+        evaluations=(
+            _explained_evaluation("left", (0, 1), (0, 1), 0.95),
+            _explained_evaluation("left-duplicate", (0, 1), (0, 1), 0.90),
+            _explained_evaluation("right", (2, 3), (1, 2), 0.92),
+        )
+    )
+    dense = AdaptiveResidualEvidenceCoverSelector(
+        objective_names=("internal_coherence", "contrast"),
+        complexity_penalty=0.0,
+        minimum_marginal_evidence=0.0,
+        maximum_dense_cells=1_000,
+        minimum_quality_floor=0.5,
+        maximum_quality_floor=0.5,
+    ).select(run_context, repertoire)
+    sparse = AdaptiveResidualEvidenceCoverSelector(
+        objective_names=("internal_coherence", "contrast"),
+        complexity_penalty=0.0,
+        minimum_marginal_evidence=0.0,
+        maximum_dense_cells=1,
+        minimum_quality_floor=0.5,
+        maximum_quality_floor=0.5,
+    ).select(run_context, repertoire)
+
+    expected = ("left", "right")
+    assert tuple(item.candidate.identifier for item in dense.evaluations) == expected
+    assert tuple(item.candidate.identifier for item in sparse.evaluations) == expected
+    assert tuple(
+        item.final_selection.selection_rank
+        for item in dense.evaluations
+        if item.final_selection is not None
+    ) == (0, 1)
+    assert dense.evaluations[0].final_selection is not None
+    assert dense.evaluations[0].final_selection.source_candidate_identifiers == (
+        "left",
+        "left-duplicate",
+    )
+
+
+def test_adaptive_residual_selector_configuration_is_strict() -> None:
+    with pytest.raises(ValueError, match="must not exceed"):
+        AdaptiveResidualEvidenceCoverConfiguration(
+            minimum_quality_floor=0.8,
+            maximum_quality_floor=0.7,
+        )
+    with pytest.raises(ValueError, match="unique"):
+        AdaptiveResidualEvidenceCoverConfiguration(objective_names=("contrast", "contrast"))
+    with pytest.raises(ValueError, match="Extra inputs"):
+        AdaptiveResidualEvidenceCoverConfiguration.model_validate({"unknown": True})
+
+
+def test_adaptive_residual_selector_requires_scaled_objectives_in_unit_interval(
+    run_context: RunContext,
+) -> None:
+    unscaled = _evaluation("unscaled", (0, 1), (0, 1), 2.0, 3.0)
+    with pytest.raises(ComponentError, match="unit-interval objective values"):
+        AdaptiveResidualEvidenceCoverSelector().select(
+            run_context,
+            Repertoire(evaluations=(unscaled,)),
+        )
+
+    selected = AdaptiveResidualEvidenceCoverSelector(
+        quality_scale="empirical",
+        complexity_penalty=0.0,
+        minimum_marginal_evidence=0.0,
+    ).select(run_context, Repertoire(evaluations=(unscaled,)))
+    assert tuple(item.candidate.identifier for item in selected.evaluations) == ("unscaled",)
 
 
 def test_containment_selector_stops_at_the_first_material_quality_loss(

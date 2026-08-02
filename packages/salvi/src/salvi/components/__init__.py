@@ -81,6 +81,7 @@ from salvi.components.preprocessing import (
 )
 from salvi.components.protocols import Component, ComponentKind, ComponentTimingSource, Constraint
 from salvi.components.registry import ComponentRegistration, ComponentRegistry
+from salvi.components.residual_selection import AdaptiveResidualEvidenceCoverSelector
 from salvi.components.schedulers import (
     AdaptiveCreditScheduler,
     CellBalancedAdaptiveCreditScheduler,
@@ -92,6 +93,7 @@ from salvi.components.variation_emitters import CrossoverEmitter, MutationEmitte
 
 __all__ = [
     "AdaptiveCreditScheduler",
+    "AdaptiveResidualEvidenceCoverSelector",
     "AlternatingPatternLocalSearchEmitter",
     "ArchiveCoverageObserver",
     "ArchiveDescriptorDistributionObserver",
