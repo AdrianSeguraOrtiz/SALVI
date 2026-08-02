@@ -13,15 +13,18 @@ from salvi.domain import (
 )
 from salvi.infrastructure.events import SQLiteEventStore
 from salvi_experiments.benchmark import run_salvi_ablation
+from salvi_experiments.benchmark.ablation import _aggregate_paired_deltas_by_dataset
 from salvi_experiments.cli import main
 from salvi_experiments.configuration import (
     AblationDatasetSelection,
     AblationMetricsConfiguration,
+    AblationPairwiseComparison,
     AblationPipeline,
     AblationSelector,
     SalviAblationConfiguration,
     UncertaintyConfiguration,
 )
+from salvi_experiments.exceptions import ExperimentArtifactError
 from salvi_experiments.metrics import (
     analyze_run_event_store,
     flatten_configuration,
@@ -126,6 +129,36 @@ def test_ablation_configuration_rejects_ambiguous_selections(
             **base,
             pipelines=(pipeline,),
             run_seeds=(1, 1),
+        )
+    with pytest.raises(ValueError, match="must be distinct"):
+        AblationPairwiseComparison(
+            baseline_pipeline="same",
+            compared_pipeline="same",
+        )
+    with pytest.raises(ValueError, match="unknown pipelines"):
+        SalviAblationConfiguration(
+            **base,
+            pipelines=(pipeline,),
+            paired_comparisons=(
+                AblationPairwiseComparison(
+                    baseline_pipeline="same",
+                    compared_pipeline="missing",
+                ),
+            ),
+        )
+    other_pipeline = AblationPipeline(
+        identifier="other",
+        pipeline_configuration=tmp_path / "other.yaml",
+    )
+    repeated_comparison = AblationPairwiseComparison(
+        baseline_pipeline="same",
+        compared_pipeline="other",
+    )
+    with pytest.raises(ValueError, match="paired comparisons must be unique"):
+        SalviAblationConfiguration(
+            **base,
+            pipelines=(pipeline, other_pipeline),
+            paired_comparisons=(repeated_comparison, repeated_comparison),
         )
 
 
@@ -327,6 +360,72 @@ def test_ablation_applies_multiple_selectors_without_repeating_search(
 
     run_salvi_ablation(configuration)
     assert metadata.stat().st_mtime_ns == first_timestamp
+
+
+def test_ablation_can_use_dataset_as_the_paired_analysis_unit(
+    tmp_path: Path,
+    experiment_dataset: Path,
+    scientific_pipeline: Path,
+) -> None:
+    base = _configuration(tmp_path, experiment_dataset, scientific_pipeline)
+    configuration = base.model_copy(
+        update={
+            "run_seeds": (7, 8),
+            "metrics": base.metrics.model_copy(
+                update={
+                    "artifacts": ("FINAL",),
+                    "paired_analysis_unit": "DATASET",
+                    "paired_seed_aggregation": "MEAN",
+                }
+            ),
+        }
+    )
+
+    output = run_salvi_ablation(configuration)
+
+    raw = pq.read_table(output / "paired-deltas.parquet").to_pylist()
+    analyzed = pq.read_table(output / "paired-analysis-deltas.parquet").to_pylist()
+    summary = pq.read_table(output / "paired-summary.parquet").to_pylist()
+    assert len(raw) == 2 * len(analyzed)
+    assert len(summary) == len(analyzed)
+    assert {record["run_seed_count"] for record in analyzed} == {2}
+    assert {record["seed_aggregation"] for record in analyzed} == {"MEAN"}
+    assert {record["sample_count"] for record in summary} == {1}
+    assert all(record["holm_adjusted_p_value"] == 1.0 for record in summary)
+
+
+def test_dataset_level_ablation_excludes_incomplete_seed_pairs() -> None:
+    record = {
+        "comparison_scope": "SEARCH_REPERTOIRE",
+        "baseline_pipeline": "baseline",
+        "compared_pipeline": "variant",
+        "artifact": "SEARCH",
+        "dataset_identifier": "dataset",
+        "run_seed": 7,
+        "metric": "recovery",
+        "preferred_direction": "HIGHER",
+        "baseline_value": 0.4,
+        "compared_value": 0.5,
+        "delta": 0.1,
+        "favorable_delta": 0.1,
+    }
+    aggregated, incomplete = _aggregate_paired_deltas_by_dataset(
+        [record],
+        aggregation="MEAN",
+        required_run_seeds=(7, 8),
+    )
+
+    assert aggregated == []
+    assert len(incomplete) == 1
+    assert incomplete[0]["expected_run_seeds"] == [7, 8]
+    assert incomplete[0]["observed_run_seeds"] == [7]
+
+    with pytest.raises(ExperimentArtifactError, match="duplicate run seeds"):
+        _aggregate_paired_deltas_by_dataset(
+            [record, record],
+            aggregation="MEDIAN",
+            required_run_seeds=(7,),
+        )
 
 
 def test_ablation_cli_loads_strict_yaml(

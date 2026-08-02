@@ -8,7 +8,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pyarrow.parquet as pq
+from scipy.stats import rankdata, wilcoxon
 
 from salvi import load_configuration, load_pipeline_configuration
 from salvi_experiments.artifacts import (
@@ -25,6 +27,7 @@ from salvi_experiments.configuration import (
     ComparisonConfiguration,
     ObjectiveAlignmentBenchmarkConfiguration,
     ObjectiveAlignmentConfiguration,
+    UncertaintyConfiguration,
 )
 from salvi_experiments.dataset import run_accuracy, run_objective_alignment
 from salvi_experiments.exceptions import ExperimentArtifactError
@@ -398,6 +401,119 @@ def _accuracy_records(directory: Path) -> tuple[dict[str, object], list[dict[str
     return report, records
 
 
+def _aggregate_algorithm_replicates(
+    records: list[dict[str, Any]],
+    *,
+    algorithm: str,
+    method: str,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        grouped.setdefault(str(record["dataset_identifier"]), []).append(record)
+    if method == "ERROR":
+        duplicates = sorted(identifier for identifier, values in grouped.items() if len(values) > 1)
+        if duplicates:
+            raise ExperimentArtifactError(
+                f"algorithm {algorithm!r} contains duplicate dataset results: "
+                f"{', '.join(duplicates)}"
+            )
+        return records
+
+    reducer = np.mean if method == "MEAN" else np.median
+    aggregated: list[dict[str, Any]] = []
+    for dataset_identifier, samples in sorted(grouped.items()):
+        keys = sorted({key for sample in samples for key in sample})
+        result: dict[str, Any] = {
+            "case_id": dataset_identifier,
+            "experiment_id": f"aggregated:{algorithm}:{dataset_identifier}",
+            "dataset_identifier": dataset_identifier,
+            "replicate_count": len(samples),
+            "replicate_aggregation": method,
+        }
+        for key in keys:
+            if key in result:
+                continue
+            values = [sample.get(key) for sample in samples]
+            if all(
+                isinstance(value, int | float) and not isinstance(value, bool) for value in values
+            ):
+                result[key] = float(reducer(np.asarray(values, dtype=np.float64)))
+            elif all(value == values[0] for value in values):
+                result[key] = values[0]
+            else:
+                result[key] = None
+        aggregated.append(result)
+    return aggregated
+
+
+def _comparison_paired_summary(
+    deltas: list[dict[str, object]],
+    uncertainty: UncertaintyConfiguration,
+) -> list[dict[str, object]]:
+    algorithms = sorted({str(record["algorithm"]) for record in deltas})
+    results: list[dict[str, object]] = []
+    for algorithm_index, algorithm in enumerate(algorithms):
+        selected = [record for record in deltas if record["algorithm"] == algorithm]
+        for metric_index, metric in enumerate(ACCURACY_METRICS):
+            values = np.asarray(
+                [_number(record[f"{metric}_delta"]) for record in selected],
+                dtype=np.float64,
+            )
+            tie_mask = np.isclose(values, 0.0)
+            nonzero = values[~tie_mask]
+            if nonzero.size:
+                ranks = rankdata(np.abs(nonzero), method="average")
+                rank_biserial = float(
+                    (ranks[nonzero > 0.0].sum() - ranks[nonzero < 0.0].sum()) / ranks.sum()
+                )
+                p_value = float(
+                    wilcoxon(
+                        nonzero,
+                        zero_method="wilcox",
+                        alternative="two-sided",
+                        method="auto",
+                    ).pvalue
+                )
+            else:
+                rank_biserial = 0.0
+                p_value = 1.0
+            results.append(
+                {
+                    "baseline": str(selected[0]["baseline"]),
+                    "algorithm": algorithm,
+                    "metric": metric,
+                    "dataset_count": len(values),
+                    "favorable_count": int(np.count_nonzero((values > 0.0) & ~tie_mask)),
+                    "unfavorable_count": int(np.count_nonzero((values < 0.0) & ~tie_mask)),
+                    "tie_count": int(np.count_nonzero(tie_mask)),
+                    "wilcoxon_p_value": p_value,
+                    "rank_biserial_effect": rank_biserial,
+                    **{
+                        f"delta_{name}": value
+                        for name, value in summarize_metric(
+                            values.tolist(),
+                            uncertainty,
+                            seed_offset=(algorithm_index * len(ACCURACY_METRICS) + metric_index),
+                        ).items()
+                    },
+                }
+            )
+    for metric in ACCURACY_METRICS:
+        group = sorted(
+            (record for record in results if record["metric"] == metric),
+            key=lambda record: _number(record["wilcoxon_p_value"]),
+        )
+        running = 0.0
+        for index, record in enumerate(group):
+            adjusted = min(
+                1.0,
+                _number(record["wilcoxon_p_value"]) * (len(group) - index),
+            )
+            running = max(running, adjusted)
+            record["holm_adjusted_p_value"] = running
+    return results
+
+
 def run_comparison(
     configuration: ComparisonConfiguration,
     *,
@@ -430,11 +546,12 @@ def run_comparison(
                     "algorithm comparison inputs use different scientific task scopes"
                 )
             algorithm_records.extend(records)
+        algorithm_records = _aggregate_algorithm_replicates(
+            algorithm_records,
+            algorithm=algorithm.identifier,
+            method=algorithm.replicate_aggregation,
+        )
         datasets = [str(record["dataset_identifier"]) for record in algorithm_records]
-        if len(set(datasets)) != len(datasets):
-            raise ExperimentArtifactError(
-                f"algorithm {algorithm.identifier!r} contains duplicate dataset results"
-            )
         dataset_set = set(datasets)
         if expected_datasets is None:
             expected_datasets = dataset_set
@@ -493,6 +610,7 @@ def run_comparison(
                     },
                 }
             )
+    paired_summary = _comparison_paired_summary(deltas, configuration.uncertainty)
 
     reporter.stage(f"writing comparison artifacts to {configuration.output_directory}")
     with atomic_experiment_directory(
@@ -502,17 +620,23 @@ def run_comparison(
         write_table(temporary, "per-dataset", per_dataset)
         write_table(temporary, "summary", summaries)
         write_table(temporary, "paired-deltas", deltas)
+        write_table(temporary, "paired-summary", paired_summary)
         plot_algorithm_comparison(temporary, summaries=summaries)
         report = {
             "schema_version": 1,
             "experiment_type": "benchmark.compare",
             "identifier": configuration.identifier,
             "algorithms": [algorithm.identifier for algorithm in configuration.algorithms],
+            "replicate_aggregation": {
+                algorithm.identifier: algorithm.replicate_aggregation
+                for algorithm in configuration.algorithms
+            },
             "baseline_algorithm": baseline,
             "dataset_count": len(expected_datasets),
             "task": task,
             "uncertainty": configuration.uncertainty.model_dump(mode="json"),
             "summary": summaries,
+            "paired_summary": paired_summary,
         }
         write_json(temporary / "report.json", report)
         write_manifest(

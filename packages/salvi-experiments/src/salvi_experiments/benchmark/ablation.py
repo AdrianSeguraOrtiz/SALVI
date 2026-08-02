@@ -16,7 +16,9 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+import numpy as np
 import yaml
+from scipy.stats import rankdata, wilcoxon
 
 import salvi
 from salvi import (
@@ -684,6 +686,13 @@ def _numeric(record: dict[str, object], field: str) -> float | None:
     return float(value) if isinstance(value, int | float) else None
 
 
+def _required_numeric(record: dict[str, object], field: str) -> float:
+    value = _numeric(record, field)
+    if value is None:
+        raise ExperimentArtifactError(f"ablation field {field!r} is not numeric")
+    return value
+
+
 def _pattern_label(record: dict[str, object]) -> str:
     patterns = record.get("patterns")
     if not isinstance(patterns, list | tuple):
@@ -739,6 +748,7 @@ def _paired_deltas(
     records: list[dict[str, object]],
     *,
     baseline: str,
+    compared: str | None = None,
     artifact_sensitive: bool,
     metrics: tuple[str, ...],
     comparison_scope: str,
@@ -752,7 +762,7 @@ def _paired_deltas(
     deltas: list[dict[str, object]] = []
     for record in records:
         pipeline = str(record["pipeline_id"])
-        if pipeline == baseline:
+        if pipeline == baseline or (compared is not None and pipeline != compared):
             continue
         key = tuple(record[field] for field in key_fields)
         reference = baseline_records.get(key)
@@ -891,6 +901,29 @@ def _paired_summary(
             uncertainty,
             seed_offset=index * 2 + 1,
         )
+        favorable_values = np.asarray(
+            [value[1] for value in values],
+            dtype=np.float64,
+        )
+        tie_mask = np.isclose(favorable_values, 0.0)
+        nonzero = favorable_values[~tie_mask]
+        if nonzero.size:
+            ranks = rankdata(np.abs(nonzero), method="average")
+            rank_sum = float(ranks.sum())
+            rank_biserial = float(
+                (ranks[nonzero > 0.0].sum() - ranks[nonzero < 0.0].sum()) / rank_sum
+            )
+            p_value = float(
+                wilcoxon(
+                    nonzero,
+                    zero_method="wilcox",
+                    alternative="two-sided",
+                    method="auto",
+                ).pvalue
+            )
+        else:
+            rank_biserial = 0.0
+            p_value = 1.0
         results.append(
             {
                 "comparison_scope": scope,
@@ -899,11 +932,133 @@ def _paired_summary(
                 "artifact": artifact,
                 "metric": metric,
                 "preferred_direction": direction,
+                "sample_count": len(values),
+                "favorable_count": int(np.count_nonzero((favorable_values > 0.0) & ~tie_mask)),
+                "unfavorable_count": int(np.count_nonzero((favorable_values < 0.0) & ~tie_mask)),
+                "tie_count": int(np.count_nonzero(tie_mask)),
+                "wilcoxon_p_value": p_value,
+                "rank_biserial_effect": rank_biserial,
                 **{f"delta_{name}": value for name, value in delta_summary.items()},
                 **{f"favorable_delta_{name}": value for name, value in favorable_summary.items()},
             }
         )
+    _apply_holm_correction(results)
     return results
+
+
+def _apply_holm_correction(records: list[dict[str, object]]) -> None:
+    grouped: dict[tuple[str, str, str], list[dict[str, object]]] = defaultdict(list)
+    for record in records:
+        grouped[
+            (
+                str(record["comparison_scope"]),
+                str(record["artifact"]),
+                str(record["metric"]),
+            )
+        ].append(record)
+    for group in grouped.values():
+        ordered = sorted(group, key=lambda record: _required_numeric(record, "wilcoxon_p_value"))
+        running = 0.0
+        count = len(ordered)
+        for index, record in enumerate(ordered):
+            adjusted = min(
+                1.0,
+                _required_numeric(record, "wilcoxon_p_value") * (count - index),
+            )
+            running = max(running, adjusted)
+            record["holm_adjusted_p_value"] = running
+
+
+def _aggregate_paired_deltas_by_dataset(
+    deltas: list[dict[str, object]],
+    *,
+    aggregation: str,
+    required_run_seeds: tuple[int, ...],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    grouped: dict[
+        tuple[str, str, str, str, str, str, str],
+        list[dict[str, object]],
+    ] = defaultdict(list)
+    for record in deltas:
+        grouped[
+            (
+                str(record["comparison_scope"]),
+                str(record["baseline_pipeline"]),
+                str(record["compared_pipeline"]),
+                str(record.get("artifact", "RUN")),
+                str(record["dataset_identifier"]),
+                str(record["metric"]),
+                str(record["preferred_direction"]),
+            )
+        ].append(record)
+
+    reducer = np.mean if aggregation == "MEAN" else np.median
+    aggregated: list[dict[str, object]] = []
+    incomplete: list[dict[str, object]] = []
+    expected_seeds = frozenset(required_run_seeds)
+    for key, records in sorted(grouped.items()):
+        (
+            scope,
+            baseline,
+            pipeline,
+            artifact,
+            dataset,
+            metric,
+            direction,
+        ) = key
+        observed_seeds = tuple(
+            sorted(int(_required_numeric(record, "run_seed")) for record in records)
+        )
+        if len(observed_seeds) != len(set(observed_seeds)):
+            raise ExperimentArtifactError(
+                "paired ablation contains duplicate run seeds for "
+                f"{baseline!r} versus {pipeline!r} on {dataset!r}"
+            )
+        if frozenset(observed_seeds) != expected_seeds:
+            incomplete.append(
+                {
+                    "comparison_scope": scope,
+                    "baseline_pipeline": baseline,
+                    "compared_pipeline": pipeline,
+                    "artifact": artifact,
+                    "dataset_identifier": dataset,
+                    "metric": metric,
+                    "expected_run_seeds": list(required_run_seeds),
+                    "observed_run_seeds": list(observed_seeds),
+                }
+            )
+            continue
+
+        aggregated.append(
+            {
+                "comparison_scope": scope,
+                "baseline_pipeline": baseline,
+                "compared_pipeline": pipeline,
+                "artifact": artifact,
+                "dataset_identifier": dataset,
+                "metric": metric,
+                "preferred_direction": direction,
+                "seed_aggregation": aggregation,
+                "run_seed_count": len(records),
+                **{
+                    field: float(
+                        reducer(
+                            np.asarray(
+                                [_required_numeric(record, field) for record in records],
+                                dtype=np.float64,
+                            )
+                        )
+                    )
+                    for field in (
+                        "baseline_value",
+                        "compared_value",
+                        "delta",
+                        "favorable_delta",
+                    )
+                },
+            }
+        )
+    return aggregated, incomplete
 
 
 def _study_manifest(root: Path, configuration: SalviAblationConfiguration) -> None:
@@ -1166,35 +1321,43 @@ def run_salvi_ablation(
         uncertainty=configuration.metrics.aggregate_uncertainty,
     )
     baseline = configuration.pipelines[0].identifier
+    pipeline_pairs = tuple(
+        (item.baseline_pipeline, item.compared_pipeline)
+        for item in configuration.paired_comparisons
+    ) or tuple((baseline, pipeline.identifier) for pipeline in configuration.pipelines[1:])
     repertoire_paired: list[dict[str, object]] = []
     if configuration.selectors:
         archive_records = [
             record for record in repertoire_records if record["artifact"] == "SEARCH"
         ]
         final_records = [record for record in repertoire_records if record["artifact"] == "FINAL"]
-        repertoire_paired.extend(
-            _paired_deltas(
-                archive_records,
-                baseline=baseline,
-                artifact_sensitive=True,
-                metrics=(*_ACCURACY_METRICS, *coverage_metrics),
-                comparison_scope="SEARCH_REPERTOIRE",
-            )
-        )
-        for selector in configuration.selectors:
+        for pair_baseline, pair_compared in pipeline_pairs:
             repertoire_paired.extend(
                 _paired_deltas(
-                    [
-                        record
-                        for record in final_records
-                        if record["selector_id"] == selector.identifier
-                    ],
-                    baseline=f"{baseline}::{selector.identifier}",
+                    archive_records,
+                    baseline=pair_baseline,
+                    compared=pair_compared,
                     artifact_sensitive=True,
                     metrics=(*_ACCURACY_METRICS, *coverage_metrics),
-                    comparison_scope="SEARCH_WITH_SELECTOR",
+                    comparison_scope="SEARCH_REPERTOIRE",
                 )
             )
+        for selector in configuration.selectors:
+            for pair_baseline, pair_compared in pipeline_pairs:
+                repertoire_paired.extend(
+                    _paired_deltas(
+                        [
+                            record
+                            for record in final_records
+                            if record["selector_id"] == selector.identifier
+                        ],
+                        baseline=f"{pair_baseline}::{selector.identifier}",
+                        compared=f"{pair_compared}::{selector.identifier}",
+                        artifact_sensitive=True,
+                        metrics=(*_ACCURACY_METRICS, *coverage_metrics),
+                        comparison_scope="SEARCH_WITH_SELECTOR",
+                    )
+                )
         for pipeline in configuration.pipelines:
             repertoire_paired.extend(
                 _paired_deltas(
@@ -1210,27 +1373,43 @@ def run_salvi_ablation(
                 )
             )
     else:
-        repertoire_paired.extend(
-            _paired_deltas(
-                repertoire_records,
-                baseline=baseline,
-                artifact_sensitive=True,
-                metrics=(*_ACCURACY_METRICS, *coverage_metrics),
-                comparison_scope="SEARCH_REPERTOIRE",
+        for pair_baseline, pair_compared in pipeline_pairs:
+            repertoire_paired.extend(
+                _paired_deltas(
+                    repertoire_records,
+                    baseline=pair_baseline,
+                    compared=pair_compared,
+                    artifact_sensitive=True,
+                    metrics=(*_ACCURACY_METRICS, *coverage_metrics),
+                    comparison_scope="SEARCH_REPERTOIRE",
+                )
             )
-        )
     paired = [
         *repertoire_paired,
-        *_paired_deltas(
-            run_records,
-            baseline=baseline,
-            artifact_sensitive=False,
-            metrics=("wall_time_seconds", "evaluations_per_second"),
-            comparison_scope="SEARCH_RUNTIME",
+        *(
+            delta
+            for pair_baseline, pair_compared in pipeline_pairs
+            for delta in _paired_deltas(
+                run_records,
+                baseline=pair_baseline,
+                compared=pair_compared,
+                artifact_sensitive=False,
+                metrics=("wall_time_seconds", "evaluations_per_second"),
+                comparison_scope="SEARCH_RUNTIME",
+            )
         ),
     ]
+    if configuration.metrics.paired_analysis_unit == "DATASET":
+        analysis_deltas, incomplete_paired = _aggregate_paired_deltas_by_dataset(
+            paired,
+            aggregation=configuration.metrics.paired_seed_aggregation,
+            required_run_seeds=configuration.run_seeds,
+        )
+    else:
+        analysis_deltas = paired
+        incomplete_paired = []
     paired_summary = _paired_summary(
-        paired,
+        analysis_deltas,
         configuration.metrics.aggregate_uncertainty,
     )
     differences = _configuration_differences(loaded_pipelines)
@@ -1251,7 +1430,10 @@ def run_salvi_ablation(
         write_table(root, "repertoire-summary", repertoire_summary)
     if paired:
         write_table(root, "paired-deltas", paired)
+        write_table(root, "paired-analysis-deltas", analysis_deltas)
         write_table(root, "paired-summary", paired_summary)
+    if incomplete_paired:
+        write_table(root, "incomplete-paired-datasets", incomplete_paired)
     if differences:
         write_table(root, "configuration-differences", differences)
     if selector_differences:
@@ -1280,11 +1462,18 @@ def run_salvi_ablation(
         ),
         "failed_selection_count": sum(record["status"] == "failed" for record in selection_records),
         "baseline_pipeline": baseline,
+        "paired_comparisons": [
+            {"baseline_pipeline": left, "compared_pipeline": right}
+            for left, right in pipeline_pairs
+        ],
         "baseline_selector": (
             None if not configuration.selectors else configuration.selectors[0].identifier
         ),
         "pattern_binding": configuration.pattern_binding,
         "artifacts": list(configuration.metrics.artifacts),
+        "paired_analysis_unit": configuration.metrics.paired_analysis_unit,
+        "paired_seed_aggregation": configuration.metrics.paired_seed_aggregation,
+        "incomplete_paired_dataset_count": len(incomplete_paired),
         "salvi_implementation_sha256": implementation_sha256,
         "effective_workers": workers,
         "summary": {

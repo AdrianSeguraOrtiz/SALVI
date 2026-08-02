@@ -4,9 +4,11 @@ algorithms:
   - identifier: SALVI
     accuracy_results:
       - ../../experiment-results/accuracy-benchmark
+    replicate_aggregation: ERROR
   - identifier: HBIC
     accuracy_results:
       - ../../experiment-results/hbic-accuracy-benchmark
+    replicate_aggregation: ERROR
 output_directory: ../../experiment-results/comparison
 uncertainty:
   bootstrap_samples: 2000

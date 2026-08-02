@@ -145,6 +145,19 @@ class AblationPipeline(FrozenExperimentModel):
     pipeline_configuration: Path
 
 
+class AblationPairwiseComparison(FrozenExperimentModel):
+    """One explicit paired contrast between two configured pipelines."""
+
+    baseline_pipeline: str = Field(min_length=1)
+    compared_pipeline: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_distinct_pipelines(self) -> Self:
+        if self.baseline_pipeline == self.compared_pipeline:
+            raise ValueError("paired comparison pipelines must be distinct")
+        return self
+
+
 class AblationSelector(FrozenExperimentModel):
     """Optional final selector applied offline to every completed search result."""
 
@@ -179,6 +192,8 @@ class AblationMetricsConfiguration(FrozenExperimentModel):
     )
     structural_row_weight: Annotated[float, Field(ge=0.0, le=1.0)] = 0.5
     diversity_sample_size: Annotated[int, Field(ge=2)] = 1000
+    paired_analysis_unit: Literal["RUN", "DATASET"] = "RUN"
+    paired_seed_aggregation: Literal["MEAN", "MEDIAN"] = "MEAN"
 
     @model_validator(mode="after")
     def validate_metrics(self) -> Self:
@@ -200,6 +215,7 @@ class SalviAblationConfiguration(FrozenExperimentModel):
     datasets: AblationDatasetSelection = Field(default_factory=AblationDatasetSelection)
     pattern_binding: Literal["PIPELINE", "GROUND_TRUTH"]
     pipelines: Annotated[tuple[AblationPipeline, ...], Field(min_length=1)]
+    paired_comparisons: tuple[AblationPairwiseComparison, ...] = ()
     selectors: tuple[AblationSelector, ...] = ()
     run_seeds: Annotated[tuple[Annotated[int, Field(ge=0)], ...], Field(min_length=1)] = (0,)
     task: TaskScope = Field(default_factory=TaskScope)
@@ -214,6 +230,24 @@ class SalviAblationConfiguration(FrozenExperimentModel):
         identifiers = tuple(pipeline.identifier for pipeline in self.pipelines)
         if len(set(identifiers)) != len(identifiers):
             raise ValueError("ablation pipeline identifiers must be unique")
+        configured = set(identifiers)
+        comparison_pairs = tuple(
+            (item.baseline_pipeline, item.compared_pipeline) for item in self.paired_comparisons
+        )
+        if len(set(comparison_pairs)) != len(comparison_pairs):
+            raise ValueError("ablation paired comparisons must be unique")
+        unknown = sorted(
+            {
+                identifier
+                for pair in comparison_pairs
+                for identifier in pair
+                if identifier not in configured
+            }
+        )
+        if unknown:
+            raise ValueError(
+                "ablation paired comparisons reference unknown pipelines: " + ", ".join(unknown)
+            )
         selector_identifiers = tuple(selector.identifier for selector in self.selectors)
         if len(set(selector_identifiers)) != len(selector_identifiers):
             raise ValueError("ablation selector identifiers must be unique")
@@ -434,6 +468,7 @@ class AccuracyBenchmarkConfiguration(FrozenExperimentModel):
 class ComparisonAlgorithm(FrozenExperimentModel):
     identifier: str = Field(min_length=1)
     accuracy_results: Annotated[tuple[Path, ...], Field(min_length=1)]
+    replicate_aggregation: Literal["ERROR", "MEAN", "MEDIAN"] = "ERROR"
 
 
 class ComparisonConfiguration(FrozenExperimentModel):

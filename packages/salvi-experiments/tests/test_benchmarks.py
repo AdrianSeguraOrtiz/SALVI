@@ -13,6 +13,10 @@ from salvi_experiments.benchmark import (
     run_comparison,
     run_objective_alignment_benchmark,
 )
+from salvi_experiments.benchmark.protocols import (
+    _aggregate_algorithm_replicates,
+    _comparison_paired_summary,
+)
 from salvi_experiments.configuration import (
     AccuracyBenchmarkCase,
     AccuracyBenchmarkConfiguration,
@@ -352,6 +356,102 @@ def test_comparison_consumes_prior_accuracy_outputs(
     assert report["algorithms"] == ["SALVI", "HBIC"]
     deltas = pq.read_table(comparison / "paired-deltas.parquet").to_pylist()
     assert deltas[0]["relevance_delta"] == 0.0
+
+
+def test_comparison_aggregates_explicit_algorithm_replicates(
+    tmp_path: Path,
+    experiment_dataset: Path,
+    perfect_bicluster_set: Path,
+) -> None:
+    salvi = tmp_path / "salvi-accuracy"
+    hbic = tmp_path / "hbic-accuracy"
+    for algorithm, output in (("SALVI", salvi), ("HBIC", hbic)):
+        run_accuracy(
+            AccuracyConfiguration(
+                identifier=f"{algorithm}-accuracy",
+                dataset_bundle=experiment_dataset,
+                bicluster_set=perfect_bicluster_set,
+                output_directory=output,
+                algorithm=_algorithm(algorithm),
+                uncertainty=UncertaintyConfiguration(bootstrap_samples=0),
+            )
+        )
+
+    with pytest.raises(ExperimentArtifactError, match="duplicate dataset"):
+        run_comparison(
+            ComparisonConfiguration(
+                identifier="strict-comparison",
+                algorithms=(
+                    ComparisonAlgorithm(
+                        identifier="SALVI",
+                        accuracy_results=(salvi, salvi),
+                    ),
+                    ComparisonAlgorithm(identifier="HBIC", accuracy_results=(hbic,)),
+                ),
+                output_directory=tmp_path / "strict-comparison",
+            )
+        )
+
+    output = tmp_path / "replicated-comparison"
+    run_comparison(
+        ComparisonConfiguration(
+            identifier="replicated-comparison",
+            algorithms=(
+                ComparisonAlgorithm(
+                    identifier="SALVI",
+                    accuracy_results=(salvi, salvi),
+                    replicate_aggregation="MEAN",
+                ),
+                ComparisonAlgorithm(identifier="HBIC", accuracy_results=(hbic,)),
+            ),
+            output_directory=output,
+            uncertainty=UncertaintyConfiguration(bootstrap_samples=0),
+        )
+    )
+
+    records = pq.read_table(output / "per-dataset.parquet").to_pylist()
+    salvi_record = next(record for record in records if record["algorithm"] == "SALVI")
+    assert salvi_record["replicate_count"] == 2
+    assert salvi_record["replicate_aggregation"] == "MEAN"
+    paired = pq.read_table(output / "paired-summary.parquet").to_pylist()
+    assert {record["metric"] for record in paired} == {
+        "relevance",
+        "recovery",
+        "biclustering_error",
+    }
+    assert all(record["holm_adjusted_p_value"] == 1.0 for record in paired)
+
+
+def test_comparison_statistics_cover_nonzero_deltas_and_median_replicates() -> None:
+    summary = _comparison_paired_summary(
+        [
+            {
+                "baseline": "SALVI",
+                "algorithm": "HBIC",
+                "relevance_delta": delta,
+                "recovery_delta": delta,
+                "biclustering_error_delta": delta,
+            }
+            for delta in (0.1, -0.2, 0.3)
+        ],
+        UncertaintyConfiguration(bootstrap_samples=0),
+    )
+
+    assert len(summary) == 3
+    assert {record["favorable_count"] for record in summary} == {2}
+    assert {record["unfavorable_count"] for record in summary} == {1}
+    assert all(0.0 <= record["wilcoxon_p_value"] <= 1.0 for record in summary)
+
+    aggregated = _aggregate_algorithm_replicates(
+        [
+            {"dataset_identifier": "dataset", "recovery": 0.2, "label": "first"},
+            {"dataset_identifier": "dataset", "recovery": 0.8, "label": "second"},
+        ],
+        algorithm="SALVI",
+        method="MEDIAN",
+    )
+    assert aggregated[0]["recovery"] == 0.5
+    assert aggregated[0]["label"] is None
 
 
 def test_objective_alignment_benchmark_iterates_reusable_pipelines(

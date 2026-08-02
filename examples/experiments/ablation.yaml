@@ -16,6 +16,10 @@ pipelines:
   - identifier: repeated-baseline
     pipeline_configuration: ../smoke-configuration.yaml
 
+paired_comparisons:
+  - baseline_pipeline: baseline
+    compared_pipeline: repeated-baseline
+
 # These are independent SALVI random seeds. Dataset replicate filters above
 # refer instead to suffixes such as _101 and _102 in benchmark identifiers.
 run_seeds: [7]
@@ -36,6 +40,9 @@ metrics:
     seed: 0
   structural_row_weight: 0.5
   diversity_sample_size: 1000
+  # Aggregate stochastic seeds within each dataset before paired inference.
+  paired_analysis_unit: DATASET
+  paired_seed_aggregation: MEAN
 
 execution:
   workers: 1
