@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Literal
@@ -23,13 +22,16 @@ from salvi.components.candidate_initialization import (
     StratifiedInitializer,
     StratifiedInitializerConfiguration,
     _candidate,
-    _constant_column_errors,
     _random_candidate,
 )
 from salvi.domain.enums import ColumnKind, PatternKind
 from salvi.domain.models import Candidate, Evaluation, PatternFit, Repertoire
 from salvi.domain.search import BootstrapCellState
 from salvi.exceptions import ComponentError
+from salvi.patterns.catalog import default_pattern_catalog
+from salvi.patterns.joint_models import robust_column_scales
+from salvi.patterns.math import nanmedian_2d
+from salvi.patterns.seeding import constant_column_errors
 
 
 class MembershipEmitterConfiguration(BaseModel):
@@ -106,6 +108,7 @@ def _row_compatibilities(
     error_count = np.zeros(len(rows), dtype=np.int32)
     groups = {group.identifier: group for group in fit.groups}
     row_effects: dict[str, npt.NDArray[np.float64]] = {}
+    group_scales: dict[tuple[str, int], float] = {}
     for group in fit.groups:
         fitted_columns = tuple(
             column
@@ -123,16 +126,19 @@ def _row_compatibilities(
             [dataset.numeric_positions[column] for column in columns],
             dtype=np.int64,
         )
+        scales = robust_column_scales(context, columns)
+        group_scales.update(
+            {
+                (group.identifier, column): float(scales[position])
+                for position, column in enumerate(columns)
+            }
+        )
         if group.pattern is PatternKind.ADDITIVE:
-            matrix = dataset.numeric_matrix(standardized=True)[np.ix_(rows, positions)]
+            matrix = dataset.numeric_matrix()[np.ix_(rows, positions)]
             estimates = matrix - parameters[np.newaxis, :]
         elif group.pattern is PatternKind.MULTIPLICATIVE:
             matrix = dataset.numeric_matrix()[np.ix_(rows, positions)]
-            scales = np.asarray(
-                [dataset.numeric_statistics[int(position)].robust_range for position in positions],
-                dtype=np.float64,
-            )
-            usable_parameters = (scales > 1e-12) & (np.abs(parameters) > 1e-12)
+            usable_parameters = np.abs(parameters) > 1e-12
             estimates = np.full_like(matrix, np.nan)
             np.divide(
                 matrix,
@@ -143,9 +149,7 @@ def _row_compatibilities(
         else:
             raise ComponentError(f"{group.pattern.value} has no guided row-compatibility strategy")
         usable_count = np.count_nonzero(np.isfinite(estimates), axis=1)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            effects = np.nanmedian(estimates, axis=1)
+        effects = nanmedian_2d(estimates, axis=1)
         effects[usable_count < 2] = np.nan
         row_effects[group.identifier] = effects
     for column in fit.columns:
@@ -185,9 +189,13 @@ def _row_compatibilities(
             continue
         if column.pattern is PatternKind.ADDITIVE:
             position = dataset.numeric_positions[column_index]
-            values = dataset.numeric_matrix(standardized=True)[rows, position]
+            values = dataset.numeric_matrix()[rows, position]
+            scale = group_scales[(column.group_identifier, column_index)]
             usable = np.isfinite(values) & np.isfinite(group_effects)
-            errors = np.minimum(1.0, np.abs(values - group_effects - column.parameter))
+            errors = np.minimum(
+                1.0,
+                np.abs(values - group_effects - column.parameter) / scale,
+            )
             error_sum[usable] += errors[usable]
             error_count[usable] += 1
         elif column.pattern is PatternKind.MULTIPLICATIVE:
@@ -347,7 +355,7 @@ def _external_column_compatibilities(
     columns = np.asarray(column_indices, dtype=np.int64)
     losses: dict[int, list[float]] = {column: [] for column in column_indices}
     if PatternKind.CONSTANT in context.patterns.allowed:
-        constant_errors = _constant_column_errors(context, rows, columns)
+        constant_errors = constant_column_errors(context, rows, columns)
         for column, error in zip(column_indices, constant_errors, strict=True):
             losses[column].append(float(error))
     fit = evaluation.pattern_fit
@@ -365,6 +373,14 @@ def _external_column_compatibilities(
         if dataset.numeric_positions[column] >= 0
         and context.evaluation_support_policy.is_sufficient(int(support), len(rows))
     }
+    ordered_eligible = tuple(sorted(eligible))
+    candidate_scales = dict(
+        zip(
+            ordered_eligible,
+            robust_column_scales(context, ordered_eligible),
+            strict=True,
+        )
+    )
     for group in fit.groups:
         if group.pattern not in context.patterns.allowed:
             continue
@@ -373,21 +389,27 @@ def _external_column_compatibilities(
             [alpha_by_row.get(row, math.nan) for row in rows],
             dtype=np.float64,
         )
-        for column_index in eligible:
+        for column_index in ordered_eligible:
             position = dataset.numeric_positions[column_index]
             if group.pattern is PatternKind.ADDITIVE:
-                values = dataset.numeric_matrix(standardized=True)[row_indices, position]
+                values = dataset.numeric_matrix()[row_indices, position]
                 usable = np.isfinite(values) & np.isfinite(alpha)
                 if np.count_nonzero(usable) < 2:
                     continue
                 beta = float(np.median(values[usable] - alpha[usable]))
+                scale = candidate_scales[column_index]
                 losses[column_index].append(
-                    min(1.0, float(np.mean(np.abs(values[usable] - alpha[usable] - beta))))
+                    min(
+                        1.0,
+                        float(
+                            np.mean(
+                                np.abs(values[usable] - alpha[usable] - beta) / scale
+                            )
+                        ),
+                    )
                 )
             elif group.pattern is PatternKind.MULTIPLICATIVE:
-                scale = dataset.numeric_statistics[position].robust_range
-                if scale <= 1e-12:
-                    continue
+                scale = candidate_scales[column_index]
                 values = dataset.numeric_matrix()[row_indices, position] / scale
                 usable = np.isfinite(values) & np.isfinite(alpha) & (np.abs(alpha) > 1e-12)
                 if np.count_nonzero(usable) < 2:
@@ -888,7 +910,6 @@ class CellCoverageRestartEmitter:
             coordinate = evaluation.archive_coordinate
             if coordinate in occupancy:
                 occupancy[coordinate] += 1
-        numeric_count = len(context.dataset.numeric_column_indices)
         generated: list[Candidate] = []
         initializer = CellCoveragePatternAwareInitializer(
             seeds_per_cell=1,
@@ -896,17 +917,27 @@ class CellCoverageRestartEmitter:
             joint_column_candidate_pool_size=self.joint_column_candidate_pool_size,
             component_name=self.component_name,
         )
-        for index in range(count):
-            pattern = context.patterns.allowed[
-                (start_sequence + index) % len(context.patterns.allowed)
-            ]
+        catalog = default_pattern_catalog(context.patterns.allowed)
+        reachable_by_pattern = []
+        for pattern in context.patterns.allowed:
+            strategy = catalog.implementation(pattern).seed_strategy
+            if strategy is None:
+                raise ComponentError(
+                    f"{pattern.value} has no registered pattern-aware seed strategy"
+                )
             reachable = tuple(
                 target
                 for target in qd_context.archive_cell_targets
-                if pattern is PatternKind.CONSTANT or target.column_count <= numeric_count
+                if strategy.project_target(context, target) is not None
             )
-            if not reachable:
-                raise ComponentError(f"{pattern.value} restart has no reachable archive cell")
+            if reachable:
+                reachable_by_pattern.append((pattern, reachable))
+        if not reachable_by_pattern:
+            raise ComponentError("cell-coverage restart found no reachable archive cell")
+        for index in range(count):
+            pattern, reachable = reachable_by_pattern[
+                (start_sequence + index) % len(reachable_by_pattern)
+            ]
             target = min(
                 reachable,
                 key=lambda item: (

@@ -23,8 +23,8 @@ from salvi.domain.models import (
 )
 from salvi.patterns.joint_models import (
     additive_row_effects,
-    multiplicative_column_scales,
     multiplicative_row_effects,
+    robust_column_scales,
 )
 from salvi.patterns.math import NUMERIC_TOLERANCE, clamp01, diagnostics
 
@@ -340,7 +340,7 @@ class AdditivePatternContrastStrategy:
                 [column_fits[column].parameter for column in columns], dtype=np.float64
             )
             positions = tuple(context.dataset.numeric_positions[column] for column in columns)
-            values = context.dataset.numeric_matrix(standardized=True)[:, positions]
+            values = context.dataset.numeric_matrix()[:, positions]
             source = context.dataset.support_matrix()[:, columns]
             result[group.identifier] = additive_row_effects(
                 context,
@@ -367,7 +367,14 @@ class AdditivePatternContrastStrategy:
                 self.pattern,
             )
         effects = group_effects[group.identifier]
-        values = context.dataset.numeric_column(column_index, standardized=True)
+        values = context.dataset.numeric_column(column_index)
+        position = context.dataset.numeric_positions[column_index]
+        statistics = context.dataset.numeric_statistics[position]
+        scale = (
+            statistics.robust_range
+            if statistics.robust_range > NUMERIC_TOLERANCE
+            else max(abs(statistics.median or 0.0), 1.0)
+        )
         return _joint_residual_column(
             context,
             selected,
@@ -377,6 +384,7 @@ class AdditivePatternContrastStrategy:
             values=values,
             prediction=effects + column_fit.parameter,
             group_identifier=group.identifier,
+            extra_diagnostics={"numeric_scale": scale},
         )
 
 
@@ -429,7 +437,7 @@ class MultiplicativePatternContrastStrategy:
                 [column_fits[column].parameter for column in columns],
                 dtype=np.float64,
             )
-            group_scales = multiplicative_column_scales(context, columns)
+            group_scales = robust_column_scales(context, columns)
             positions = tuple(context.dataset.numeric_positions[column] for column in columns)
             matrix = context.dataset.numeric_matrix()[:, positions] / group_scales[np.newaxis, :]
             source = context.dataset.support_matrix()[:, columns]

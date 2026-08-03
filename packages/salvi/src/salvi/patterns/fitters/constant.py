@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -19,7 +20,7 @@ from salvi.domain.enums import (
 from salvi.domain.models import Bicluster, PatternCandidateFit
 from salvi.patterns.contracts import PatternDefinition
 from salvi.patterns.fitters.common import invalid_candidate, support_counts
-from salvi.patterns.math import NUMERIC_TOLERANCE, clamp01, diagnostics
+from salvi.patterns.math import NUMERIC_TOLERANCE, clamp01, diagnostics, nanmedian_2d
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,12 +78,16 @@ class ConstantPatternFitter:
         self,
         context: RunContext,
         bicluster: Bicluster,
+        column_indices: Sequence[int] | None = None,
     ) -> tuple[PatternCandidateFit, ...]:
-        """Fit all selected columns while sharing masks and numeric matrix scans."""
+        """Fit selected columns while sharing masks and numeric matrix scans."""
 
         dataset = context.dataset
         rows = np.asarray(bicluster.row_indices, dtype=np.int64)
-        columns = np.asarray(bicluster.column_indices, dtype=np.int64)
+        selected_columns = (
+            bicluster.column_indices if column_indices is None else tuple(column_indices)
+        )
+        columns = np.asarray(selected_columns, dtype=np.int64)
         source_supports = np.count_nonzero(
             dataset.support_matrix()[np.ix_(rows, columns)],
             axis=0,
@@ -92,6 +97,7 @@ class ConstantPatternFitter:
             axis=0,
         )
         fits: list[PatternCandidateFit | None] = [None] * len(columns)
+        required_support = context.evaluation_support_policy.required_observations(len(rows))
 
         numeric_entries = tuple(
             (offset, int(column), dataset.numeric_positions[int(column)])
@@ -101,10 +107,7 @@ class ConstantPatternFitter:
         sufficient_numeric = tuple(
             entry
             for entry in numeric_entries
-            if context.evaluation_support_policy.is_sufficient(
-                int(source_supports[entry[0]]),
-                len(rows),
-            )
+            if source_supports[entry[0]] >= required_support
         )
         if sufficient_numeric:
             offsets = tuple(entry[0] for entry in sufficient_numeric)
@@ -112,17 +115,15 @@ class ConstantPatternFitter:
                 [entry[2] for entry in sufficient_numeric],
                 dtype=np.int64,
             )
-            matrix = dataset.numeric_matrix()[np.ix_(rows, positions)]
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", category=RuntimeWarning)
-                prototypes = np.nanmedian(matrix, axis=0)
-            finite = np.isfinite(matrix)
+            numeric_matrix = dataset.numeric_matrix()[np.ix_(rows, positions)]
+            prototypes = nanmedian_2d(numeric_matrix, axis=0)
+            finite = np.isfinite(numeric_matrix)
             available_counts = np.count_nonzero(finite, axis=0)
             ranges = np.asarray(
                 [dataset.numeric_statistics[int(position)].robust_range for position in positions],
                 dtype=np.float64,
             )
-            deviations = np.abs(matrix - prototypes[np.newaxis, :])
+            deviations = np.abs(numeric_matrix - prototypes[np.newaxis, :])
             with np.errstate(divide="ignore", invalid="ignore"):
                 contributions = np.where(
                     ranges[np.newaxis, :] <= NUMERIC_TOLERANCE,
@@ -153,13 +154,65 @@ class ConstantPatternFitter:
                     diagnostics=diagnostics(robust_range=float(ranges[position])),
                 )
 
+        discrete_entries = tuple(
+            (offset, int(column), dataset.discrete_positions[int(column)])
+            for offset, column in enumerate(columns)
+            if dataset.discrete_positions[int(column)] >= 0
+            and source_supports[offset] >= required_support
+        )
+        if discrete_entries:
+            offsets = tuple(entry[0] for entry in discrete_entries)
+            positions = np.asarray([entry[2] for entry in discrete_entries], dtype=np.int64)
+            discrete_matrix = dataset.discrete_matrix()[np.ix_(rows, positions)]
+            for position, offset in enumerate(offsets):
+                column_index = int(columns[offset])
+                observed_codes = discrete_matrix[:, position]
+                observed_codes = observed_codes[observed_codes >= 0]
+                if observed_codes.size == 0:
+                    fits[offset] = invalid_candidate(
+                        PatternKind.CONSTANT,
+                        source_support=int(source_supports[offset]),
+                        available_support=int(available_supports[offset]),
+                        reason="no values available for fitting",
+                        issue_code=EvaluationIssueCode.PATTERN_FIT_FAILED,
+                    )
+                    continue
+                global_frequencies = dataset.discrete_global_frequencies(column_index)
+                frequencies = np.bincount(
+                    observed_codes,
+                    minlength=len(global_frequencies),
+                )
+                prototype_code = int(np.argmax(frequencies))
+                prototype = dataset.discrete_value(column_index, prototype_code)
+                prototype_support = int(frequencies[prototype_code])
+                global_cardinality = dataset.discrete_observed_cardinality(column_index)
+                error = 0.0
+                if global_cardinality > 1:
+                    mismatch = 1.0 - prototype_support / observed_codes.size
+                    error = mismatch / (1.0 - 1.0 / global_cardinality)
+                metadata = dataset.columns[column_index]
+                fits[offset] = PatternCandidateFit.model_construct(
+                    pattern=PatternKind.CONSTANT,
+                    error=clamp01(error),
+                    parameter=(
+                        str(prototype)
+                        if metadata.kind is ColumnKind.CATEGORICAL
+                        else bool(prototype)
+                    ),
+                    parameter_scale=ParameterScale.CATEGORY_LABEL,
+                    source_support=int(source_supports[offset]),
+                    available_support=int(observed_codes.size),
+                    prototype_support=prototype_support,
+                    diagnostics=diagnostics(global_observed_cardinality=global_cardinality),
+                )
+
         for offset, raw_column in enumerate(columns):
             if fits[offset] is not None:
                 continue
             column_index = int(raw_column)
             source_support = int(source_supports[offset])
             available_support = int(available_supports[offset])
-            if not context.evaluation_support_policy.is_sufficient(source_support, len(rows)):
+            if source_support < required_support:
                 fits[offset] = invalid_candidate(
                     PatternKind.CONSTANT,
                     source_support=source_support,
@@ -175,14 +228,8 @@ class ConstantPatternFitter:
                     reason="no values available for fitting",
                     issue_code=EvaluationIssueCode.PATTERN_FIT_FAILED,
                 )
-            else:
-                fits[offset] = self._fit_discrete(
-                    context,
-                    rows,
-                    column_index,
-                    source_support,
-                    available_support,
-                )
+            else:  # pragma: no cover - every supported discrete column is batched above
+                raise RuntimeError("constant batch fitting missed a supported column")
         if any(fit is None for fit in fits):  # pragma: no cover - defensive invariant
             raise RuntimeError("constant batch fitting did not assign every selected column")
         return tuple(fit for fit in fits if fit is not None)

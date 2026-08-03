@@ -89,6 +89,36 @@ class ArchiveCellTarget(FrozenModel):
     coordinate: ArchiveCellCoordinate
     row_count: Annotated[int, Field(ge=1)]
     column_count: Annotated[int, Field(ge=1)]
+    minimum_row_count: Annotated[int, Field(ge=1)] | None = None
+    maximum_row_count: Annotated[int, Field(ge=1)] | None = None
+    minimum_column_count: Annotated[int, Field(ge=1)] | None = None
+    maximum_column_count: Annotated[int, Field(ge=1)] | None = None
+
+    @model_validator(mode="after")
+    def validate_ranges(self) -> ArchiveCellTarget:
+        if not self.row_range[0] <= self.row_count <= self.row_range[1]:
+            raise ValueError("representative row count must lie inside its cell range")
+        if not self.column_range[0] <= self.column_count <= self.column_range[1]:
+            raise ValueError("representative column count must lie inside its cell range")
+        return self
+
+    @property
+    def row_range(self) -> tuple[int, int]:
+        return (
+            self.row_count if self.minimum_row_count is None else self.minimum_row_count,
+            self.row_count if self.maximum_row_count is None else self.maximum_row_count,
+        )
+
+    @property
+    def column_range(self) -> tuple[int, int]:
+        return (
+            self.column_count
+            if self.minimum_column_count is None
+            else self.minimum_column_count,
+            self.column_count
+            if self.maximum_column_count is None
+            else self.maximum_column_count,
+        )
 
 
 class BootstrapCellState(FrozenModel):

@@ -3,7 +3,9 @@
 from salvi.patterns.catalog import PatternCatalog, default_pattern_catalog
 from salvi.patterns.configuration import PatternConfiguration
 from salvi.patterns.contracts import (
+    BatchColumnPatternFitter,
     ColumnPatternFitter,
+    GroupPatternCandidateGenerator,
     GroupPatternFitter,
     GroupPatternProposal,
     MixedPatternAssignmentStrategy,
@@ -12,6 +14,9 @@ from salvi.patterns.contracts import (
     PatternDefinition,
     PatternImplementation,
     PatternInferenceEngine,
+    PatternSeed,
+    PatternSeedShape,
+    PatternSeedStrategy,
 )
 from salvi.patterns.fitters import (
     AdditivePatternFitter,
@@ -22,9 +27,11 @@ from salvi.patterns.inference import DefaultPatternInferenceEngine, IterativeBes
 
 __all__ = [
     "AdditivePatternFitter",
+    "BatchColumnPatternFitter",
     "ColumnPatternFitter",
     "ConstantPatternFitter",
     "DefaultPatternInferenceEngine",
+    "GroupPatternCandidateGenerator",
     "GroupPatternFitter",
     "GroupPatternProposal",
     "IterativeBestFitAssignment",
@@ -37,5 +44,8 @@ __all__ = [
     "PatternDefinition",
     "PatternImplementation",
     "PatternInferenceEngine",
+    "PatternSeed",
+    "PatternSeedShape",
+    "PatternSeedStrategy",
     "default_pattern_catalog",
 ]

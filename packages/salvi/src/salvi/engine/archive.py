@@ -182,24 +182,33 @@ class DeepGridMomeArchive:
             )
         representatives = tuple(
             tuple(
-                (index, value)
+                (index, value, bounds)
                 for index in range(binner.bin_count)
                 if (value := binner.representative_integer(index)) is not None
+                and (bounds := binner.integer_bounds(index)) is not None
             )
             for binner in self._binners
         )
         targets: list[ArchiveCellTarget] = []
         for values in product(*representatives):
-            coordinate = tuple(index for index, _value in values)
+            coordinate = tuple(index for index, _value, _bounds in values)
             by_descriptor = {
-                descriptor: value
-                for descriptor, (_index, value) in zip(descriptors, values, strict=True)
+                descriptor: (value, bounds)
+                for descriptor, (_index, value, bounds) in zip(
+                    descriptors, values, strict=True
+                )
             }
+            row_count, row_bounds = by_descriptor["row_cardinality"]
+            column_count, column_bounds = by_descriptor["column_cardinality"]
             targets.append(
                 ArchiveCellTarget(
                     coordinate=ArchiveCellCoordinate(indices=coordinate),
-                    row_count=by_descriptor["row_cardinality"],
-                    column_count=by_descriptor["column_cardinality"],
+                    row_count=row_count,
+                    column_count=column_count,
+                    minimum_row_count=row_bounds[0],
+                    maximum_row_count=row_bounds[1],
+                    minimum_column_count=column_bounds[0],
+                    maximum_column_count=column_bounds[1],
                 )
             )
         return tuple(sorted(targets, key=lambda target: target.coordinate.indices))

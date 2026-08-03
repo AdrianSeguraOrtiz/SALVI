@@ -167,5 +167,33 @@ class AxisBinner:
             return None
         return min(valid, key=lambda value: (abs(value - center), value))
 
+    def integer_bounds(self, index: int) -> tuple[int, int] | None:
+        """Return the exact inclusive integer interval mapped to one bin."""
+
+        if index < 0 or index >= self.bin_count:
+            raise IndexError("archive bin index is out of range")
+        minimum = math.ceil(self.minimum)
+        maximum = math.floor(self.maximum)
+        if minimum > maximum:
+            return None
+
+        def first_integer_at_or_after_bin(target: int) -> int:
+            lower = minimum
+            upper = maximum + 1
+            while lower < upper:
+                midpoint = (lower + upper) // 2
+                mapped = self.index(float(midpoint))
+                if mapped is not None and mapped >= target:
+                    upper = midpoint
+                else:
+                    lower = midpoint + 1
+            return lower
+
+        lower = first_integer_at_or_after_bin(index)
+        upper = first_integer_at_or_after_bin(index + 1) - 1
+        if lower > maximum or lower > upper or self.index(float(lower)) != index:
+            return None
+        return lower, min(upper, maximum)
+
 
 __all__ = ["ArchiveAxisConfiguration", "AxisBinner"]

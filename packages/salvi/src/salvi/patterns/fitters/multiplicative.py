@@ -24,10 +24,16 @@ from salvi.patterns.fitters.common import (
     rejected_group,
 )
 from salvi.patterns.joint_models import (
-    multiplicative_column_scales,
     multiplicative_row_effects,
+    normalized_absolute_residuals,
+    robust_column_scales,
 )
-from salvi.patterns.math import NUMERIC_TOLERANCE, clamp01, diagnostics
+from salvi.patterns.math import (
+    NUMERIC_TOLERANCE,
+    clamp01,
+    diagnostics,
+    nanmedian_2d,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,25 +72,27 @@ class MultiplicativePatternFitter:
                 )
 
         rows = np.asarray(bicluster.row_indices, dtype=np.int64)
-        scales = multiplicative_column_scales(context, columns)
+        scales = robust_column_scales(context, columns)
         positions = np.asarray(
             [dataset.numeric_positions[column] for column in columns],
             dtype=np.int64,
         )
         column_array = np.asarray(columns, dtype=np.int64)
-        matrix = dataset.numeric_matrix()[np.ix_(rows, positions)] / scales[np.newaxis, :]
+        raw_matrix = dataset.numeric_matrix()[np.ix_(rows, positions)]
+        matrix = raw_matrix / scales[np.newaxis, :]
         source = dataset.support_matrix()[np.ix_(rows, column_array)]
         source_support = np.count_nonzero(source, axis=0)
-        for position, column_index in enumerate(columns):
-            if not context.evaluation_support_policy.is_sufficient(
-                int(source_support[position]), len(rows)
-            ):
-                return rejected_group(
-                    PatternKind.MULTIPLICATIVE,
-                    column_index,
-                    issue_code=EvaluationIssueCode.INSUFFICIENT_LOCAL_SUPPORT,
-                    reason=("insufficient original observations for multiplicative fitting"),
-                )
+        required_row_support = context.evaluation_support_policy.required_observations(
+            len(rows)
+        )
+        insufficient = np.flatnonzero(source_support < required_row_support)
+        if insufficient.size:
+            return rejected_group(
+                PatternKind.MULTIPLICATIVE,
+                columns[int(insufficient[0])],
+                issue_code=EvaluationIssueCode.INSUFFICIENT_LOCAL_SUPPORT,
+                reason=("insufficient original observations for multiplicative fitting"),
+            )
 
         initialized = self._initialize(matrix)
         if initialized is None:
@@ -136,19 +144,22 @@ class MultiplicativePatternFitter:
         source_counts = np.count_nonzero(usable_matrix & source, axis=0)
         residual_matrix = np.where(
             usable_matrix,
-            np.minimum(
-                1.0,
-                np.abs(matrix - alpha[:, np.newaxis] * beta[np.newaxis, :]),
+            normalized_absolute_residuals(
+                raw_matrix
+                - scales[np.newaxis, :]
+                * alpha[:, np.newaxis]
+                * beta[np.newaxis, :],
+                scales,
             ),
             np.nan,
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             errors = np.nanmean(residual_matrix, axis=0)
+        insufficient = np.flatnonzero(source_counts < required_row_support)
+        rejected_position = int(insufficient[0]) if insufficient.size else None
         for position, column_index in enumerate(columns):
-            available_count = int(available_counts[position])
-            source_count = int(source_counts[position])
-            if not context.evaluation_support_policy.is_sufficient(source_count, len(rows)):
+            if position == rejected_position:
                 return rejected_group(
                     PatternKind.MULTIPLICATIVE,
                     column_index,
@@ -156,6 +167,8 @@ class MultiplicativePatternFitter:
                     reason="insufficient fitted multiplicative residual support",
                     fits=tuple(fits),
                 )
+            available_count = int(available_counts[position])
+            source_count = int(source_counts[position])
             fits.append(
                 (
                     column_index,
@@ -170,6 +183,7 @@ class MultiplicativePatternFitter:
                             converged=converged,
                             iterations=iterations,
                             numeric_scale=float(scales[position]),
+                            residual_normalization="global_robust_range",
                         ),
                     ),
                 )
@@ -191,6 +205,7 @@ class MultiplicativePatternFitter:
                 selected_rows=len(rows),
                 fitted_row_effects=len(row_parameters),
                 normalization="median_absolute_row_effect",
+                residual_normalization="per_column_global_robust_range",
             ),
         )
         return GroupPatternProposal(
@@ -210,12 +225,13 @@ class MultiplicativePatternFitter:
         usable_alpha = np.isfinite(alpha) & (np.abs(alpha) > NUMERIC_TOLERANCE)
         usable = np.isfinite(matrix) & usable_alpha[:, np.newaxis]
         original = np.count_nonzero(usable & source, axis=0)
-        for position, column_index in enumerate(columns):
-            if not context.evaluation_support_policy.is_sufficient(
-                int(original[position]),
-                matrix.shape[0],
-            ):
-                return np.full(matrix.shape[1], np.nan, dtype=np.float64), column_index
+        required = context.evaluation_support_policy.required_observations(matrix.shape[0])
+        insufficient = np.flatnonzero(original < required)
+        if insufficient.size:
+            return (
+                np.full(matrix.shape[1], np.nan, dtype=np.float64),
+                columns[int(insufficient[0])],
+            )
         ratios = np.full_like(matrix, np.nan)
         np.divide(
             matrix,
@@ -223,9 +239,7 @@ class MultiplicativePatternFitter:
             out=ratios,
             where=usable,
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            return np.nanmedian(ratios, axis=0), None
+        return nanmedian_2d(ratios, axis=0), None
 
     @classmethod
     def _initialize(
@@ -267,9 +281,7 @@ class MultiplicativePatternFitter:
             out=ratios,
             where=usable,
         )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            beta = np.nanmedian(ratios, axis=0)
+        beta = nanmedian_2d(ratios, axis=0)
         return cls._normalize(alpha, beta)
 
     @staticmethod

@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import pyarrow as pa
 import pytest
 
@@ -18,7 +19,7 @@ from salvi.components.candidate_initialization import (
     StratifiedInitializer,
 )
 from salvi.components.descriptors import ColumnCardinality, RowCardinality
-from salvi.components.evaluation_policies import MinimumCardinality
+from salvi.components.evaluation_policies import MinimumCardinality, MinimumObservedSupport
 from salvi.components.execution import SerialEvaluationExecutor
 from salvi.components.mate_selection import (
     CellFirstEvidenceCompatibleMateSelection,
@@ -257,6 +258,99 @@ def test_cell_coverage_initializer_rejects_an_attempt_budget_below_seed_depth() 
             seeds_per_cell=4,
             max_attempts_per_cell=3,
         )
+
+
+def test_cell_coverage_initializer_uses_a_feasible_shape_inside_the_target_cell(
+    run_context: RunContext,
+) -> None:
+    initializer = CellCoveragePatternAwareInitializer(
+        seeds_per_cell=1,
+        max_attempts_per_cell=2,
+    )
+    target = ArchiveCellTarget(
+        coordinate=ArchiveCellCoordinate(indices=(0, 0)),
+        row_count=2,
+        column_count=4,
+        minimum_row_count=2,
+        maximum_row_count=2,
+        minimum_column_count=3,
+        maximum_column_count=4,
+    )
+
+    plan = initializer.bootstrap_plan(run_context, (target,))
+    candidate = initializer.initialize_bootstrap(run_context, plan)[0]
+
+    assert len(candidate.bicluster.row_indices) == 2
+    assert len(candidate.bicluster.column_indices) == 3
+    assert candidate.provenance is not None
+    assert candidate.provenance.target_archive_coordinate == (0, 0)
+
+
+def test_joint_pattern_seed_projects_away_from_marginally_supported_shape(
+    tmp_path: Path,
+) -> None:
+    columns = {
+        "a": [None, None, *[float(row) for row in range(2, 20)]],
+        "b": [None, None, *[float(row + 1) for row in range(2, 20)]],
+        "c": [None, None, *[float(row + 2) for row in range(2, 20)]],
+        "d": [3.0, 4.0, *[float(row + 3) for row in range(2, 8)], *([None] * 12)],
+    }
+    table = pa.table(columns)
+    metadata = Dataset(
+        identifier="sparse-additive",
+        bundle_path=tmp_path,
+        row_count=table.num_rows,
+        column_count=table.num_columns,
+        columns=tuple(
+            ColumnMetadata(index=index, name=name, kind=ColumnKind.NUMERIC)
+            for index, name in enumerate(table.column_names)
+        ),
+    )
+    prepared = RobustNumericScaling().transform(
+        PreparedDataset.from_arrow(
+            metadata,
+            table,
+            pa.array([f"r{index}" for index in range(table.num_rows)]),
+        )
+    )
+    from salvi.components.parent_selection import RepertoireUniformParentSelection
+
+    context = QdRunContext(
+        dataset=prepared,
+        patterns=PatternConfiguration(allowed=(PatternKind.ADDITIVE,)),
+        random_streams=NamedRandomStreams(17),
+        parent_selection_policy=RepertoireUniformParentSelection(),
+        candidate_validity_policy=MinimumCardinality(min_rows=2, min_columns=2),
+        evaluation_support_policy=MinimumObservedSupport(
+            min_observed_count=2,
+            min_observed_ratio=0.5,
+        ),
+    )
+    initializer = CellCoveragePatternAwareInitializer(
+        seeds_per_cell=1,
+        max_attempts_per_cell=2,
+        joint_column_candidate_pool_size=4,
+    )
+    target = ArchiveCellTarget(
+        coordinate=ArchiveCellCoordinate(indices=(0, 0)),
+        row_count=16,
+        column_count=4,
+        minimum_row_count=10,
+        maximum_row_count=20,
+        minimum_column_count=4,
+        maximum_column_count=4,
+    )
+
+    plan = initializer.bootstrap_plan(context, (target,))
+    candidate = initializer.initialize_bootstrap(context, plan)[0]
+
+    assert len(candidate.bicluster.row_indices) == 12
+    assert len(candidate.bicluster.column_indices) == 4
+    selected_support = prepared.support_matrix()[
+        np.ix_(candidate.bicluster.row_indices, candidate.bicluster.column_indices)
+    ]
+    assert np.all(np.count_nonzero(selected_support, axis=0) >= 6)
+    assert np.all(np.count_nonzero(selected_support, axis=1) >= 2)
 
 
 def _repertoire_candidate(
@@ -735,6 +829,35 @@ def test_cell_coverage_restart_targets_reachable_archive_cells(
         emitter.emit(context, Repertoire(), -1)
     with pytest.raises(ComponentError, match="archive cardinality targets"):
         emitter.emit(replace(context, archive_cell_targets=()), Repertoire(), 1)
+
+
+def test_cell_coverage_restart_skips_unreachable_pattern_families(
+    run_context: RunContext,
+) -> None:
+    context = replace(
+        cast(QdRunContext, run_context),
+        patterns=PatternConfiguration(allowed=tuple(PatternKind)),
+        archive_cell_targets=(
+            ArchiveCellTarget(
+                coordinate=ArchiveCellCoordinate(indices=(0, 0)),
+                row_count=2,
+                column_count=2,
+            ),
+        ),
+    )
+
+    generated = CellCoverageRestartEmitter().emit(
+        context,
+        Repertoire(),
+        3,
+        start_sequence=1,
+    )
+
+    assert all(
+        candidate.provenance is not None
+        and candidate.provenance.pattern_hint is PatternKind.CONSTANT
+        for candidate in generated
+    )
 
 
 def test_cell_first_mate_selection_never_crosses_its_configured_cell_radius(

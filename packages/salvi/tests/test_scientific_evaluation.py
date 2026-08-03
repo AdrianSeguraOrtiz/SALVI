@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -29,7 +30,13 @@ from salvi.domain import (
 )
 from salvi.evaluation import EvaluationWorkspace
 from salvi.patterns import PatternCatalog, PatternConfiguration, default_pattern_catalog
-from salvi.patterns.contracts import PatternImplementation
+from salvi.patterns.contracts import (
+    GroupPatternFitter,
+    GroupPatternProposal,
+    PatternImplementation,
+)
+from salvi.patterns.fitters.constant import ConstantPatternFitter
+from salvi.patterns.math import nanmedian_2d
 
 
 def _context(
@@ -102,9 +109,8 @@ def _candidate(rows: tuple[int, ...], columns: tuple[int, ...]) -> Candidate:
 
 
 def test_pattern_catalog_declares_column_eligibility_and_scope() -> None:
-    definitions = {
-        definition.kind: definition for definition in default_pattern_catalog().definitions()
-    }
+    catalog = default_pattern_catalog()
+    definitions = {definition.kind: definition for definition in catalog.definitions()}
     assert definitions[PatternKind.CONSTANT].scope is PatternScope.COLUMN
     assert definitions[PatternKind.CONSTANT].supported_column_kinds == frozenset(ColumnKind)
     assert definitions[PatternKind.ADDITIVE].scope is PatternScope.SUBSET
@@ -122,6 +128,15 @@ def test_pattern_catalog_declares_column_eligibility_and_scope() -> None:
     assert definitions[PatternKind.CONSTANT].reference_model
     assert not definitions[PatternKind.ADDITIVE].reference_model
     assert not definitions[PatternKind.MULTIPLICATIVE].reference_model
+    assert catalog.implementation(PatternKind.CONSTANT).group_candidate_generator is None
+    additive_generator = catalog.implementation(PatternKind.ADDITIVE).group_candidate_generator
+    multiplicative_generator = catalog.implementation(
+        PatternKind.MULTIPLICATIVE
+    ).group_candidate_generator
+    assert additive_generator is not None
+    assert multiplicative_generator is not None
+    assert additive_generator.pattern is PatternKind.ADDITIVE
+    assert multiplicative_generator.pattern is PatternKind.MULTIPLICATIVE
 
 
 def test_pattern_catalog_rejects_empty_duplicate_and_unknown_registrations() -> None:
@@ -330,8 +345,62 @@ def test_additive_only_marks_incompatible_columns_as_unassigned() -> None:
     fit = EvaluationWorkspace(context).infer(candidate)
 
     assert fit.columns[2].pattern is None
+    assert fit.columns[2].alternatives == ()
     assert not fit.valid
     assert fit.issues[0].code is EvaluationIssueCode.UNSUPPORTED_COLUMN_KIND
+
+
+def test_constant_batch_fitting_matches_scalar_fitting_for_a_column_subset() -> None:
+    table = pa.table(
+        {
+            "numeric": pa.array([1.0, None, 1.5, 2.0]),
+            "category": pa.array(["a", "a", None, "b"]),
+            "boolean": pa.array([True, True, False, None]),
+        }
+    )
+    columns = (
+        ColumnMetadata(index=0, name="numeric", kind=ColumnKind.NUMERIC),
+        ColumnMetadata(
+            index=1,
+            name="category",
+            kind=ColumnKind.CATEGORICAL,
+            categories=("a", "b"),
+        ),
+        ColumnMetadata(index=2, name="boolean", kind=ColumnKind.BOOLEAN),
+    )
+    context = _context(table, columns, min_observed_ratio=0.5)
+    bicluster = _candidate((0, 1, 2, 3), (0, 1, 2)).bicluster
+    fitter = ConstantPatternFitter()
+
+    batched = fitter.fit_columns(context, bicluster, (0, 2))
+    scalar = tuple(fitter.fit_column(context, bicluster, column) for column in (0, 2))
+
+    assert batched == scalar
+
+
+@pytest.mark.parametrize(
+    ("axis", "expected"),
+    (
+        (0, np.asarray([np.nan, 2.0, 7.0])),
+        (1, np.asarray([np.inf, 4.0, 7.0])),
+    ),
+)
+def test_nanmedian_2d_handles_missing_slices_without_warnings(
+    axis: int,
+    expected: np.ndarray,
+) -> None:
+    matrix = np.asarray(
+        (
+            (np.nan, 1.0, np.inf),
+            (np.nan, 3.0, 5.0),
+            (np.nan, np.nan, 7.0),
+        )
+    )
+
+    with np.errstate(all="raise"):
+        actual = nanmedian_2d(matrix, axis=axis)
+
+    np.testing.assert_equal(actual, expected)
 
 
 def test_additive_only_reports_insufficient_joint_cardinality_explicitly() -> None:
@@ -412,6 +481,195 @@ def test_mixed_inference_accepts_an_exact_improvement_threshold() -> None:
     assert tuple(column.pattern for column in threshold_fit.columns) == (
         PatternKind.ADDITIVE,
         PatternKind.ADDITIVE,
+    )
+
+
+def test_competing_joint_patterns_partition_columns_before_final_refit() -> None:
+    multiplicative_rows = (1.0, 2.0, 4.0, 8.0, 16.0, 32.0)
+    table = pa.table(
+        {
+            "additive-a": pa.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]),
+            "additive-b": pa.array([20.0, 21.0, 22.0, 23.0, 24.0, 25.0]),
+            "multiplicative-a": pa.array(multiplicative_rows),
+            "multiplicative-b": pa.array(
+                [10.0 * value for value in multiplicative_rows]
+            ),
+        }
+    )
+    context = _context(
+        table,
+        _numeric_columns(
+            "additive-a",
+            "additive-b",
+            "multiplicative-a",
+            "multiplicative-b",
+        ),
+        patterns=(
+            PatternKind.CONSTANT,
+            PatternKind.ADDITIVE,
+            PatternKind.MULTIPLICATIVE,
+        ),
+        min_improvement=0.05,
+    )
+
+    calls: dict[PatternKind, int] = {}
+
+    class CountingGroupFitter:
+        def __init__(self, delegate: GroupPatternFitter, pattern: PatternKind) -> None:
+            self.definition = delegate.definition
+            self._delegate = delegate
+            self._pattern = pattern
+
+        def fit_group(
+            self,
+            run_context: RunContext,
+            bicluster: Bicluster,
+            column_indices: Sequence[int],
+        ) -> GroupPatternProposal:
+            calls[self._pattern] = calls.get(self._pattern, 0) + 1
+            return self._delegate.fit_group(
+                run_context,
+                bicluster,
+                column_indices,
+            )
+
+    implementations: list[PatternImplementation] = []
+    for implementation in default_pattern_catalog(context.patterns.allowed).implementations():
+        if implementation.group_fitter is None:
+            implementations.append(implementation)
+            continue
+        implementations.append(
+            replace(
+                implementation,
+                group_fitter=CountingGroupFitter(
+                    implementation.group_fitter,
+                    implementation.definition.kind,
+                ),
+            )
+        )
+    fit = EvaluationWorkspace(
+        context,
+        pattern_catalog=PatternCatalog(implementations),
+    ).infer(
+        _candidate(tuple(range(6)), tuple(range(4)))
+    )
+
+    assert tuple(column.pattern for column in fit.columns) == (
+        PatternKind.ADDITIVE,
+        PatternKind.ADDITIVE,
+        PatternKind.MULTIPLICATIVE,
+        PatternKind.MULTIPLICATIVE,
+    )
+    assert {(group.pattern, group.column_indices) for group in fit.groups} == {
+        (PatternKind.ADDITIVE, (0, 1)),
+        (PatternKind.MULTIPLICATIVE, (2, 3)),
+    }
+    assert all(column.error == pytest.approx(0.0) for column in fit.columns)
+    assert set(calls) == {PatternKind.ADDITIVE, PatternKind.MULTIPLICATIVE}
+    assert all(2 <= count <= 17 for count in calls.values())
+
+
+def test_positive_multiplicative_pattern_is_not_an_exact_additive_pattern() -> None:
+    table = pa.table(
+        {
+            "first": pa.array([1.0, 2.0, 3.0, 4.0]),
+            "second": pa.array([10.0, 20.0, 30.0, 40.0]),
+        }
+    )
+    context = _context(
+        table,
+        _numeric_columns("first", "second"),
+        patterns=(
+            PatternKind.CONSTANT,
+            PatternKind.ADDITIVE,
+            PatternKind.MULTIPLICATIVE,
+        ),
+        min_improvement=0.0,
+    )
+
+    fit = EvaluationWorkspace(context).infer(_candidate((0, 1, 2, 3), (0, 1)))
+
+    assert tuple(column.pattern for column in fit.columns) == (
+        PatternKind.MULTIPLICATIVE,
+        PatternKind.MULTIPLICATIVE,
+    )
+    for column in fit.columns:
+        errors = {alternative.pattern: alternative.error for alternative in column.alternatives}
+        assert errors[PatternKind.MULTIPLICATIVE] == pytest.approx(0.0, abs=1e-12)
+        assert errors[PatternKind.ADDITIVE] > 0.0
+        assert not dict(column.diagnostics)["model_ambiguous"]
+
+
+def test_additive_fit_uses_raw_offsets_and_robustly_normalized_residuals() -> None:
+    table = pa.table(
+        {
+            "first": pa.array([-2.0, 0.0, 2.0, 4.0]),
+            "second": pa.array([98.0, 100.0, 102.0, 104.0]),
+        }
+    )
+    context = _context(
+        table,
+        _numeric_columns("first", "second"),
+        patterns=(PatternKind.ADDITIVE,),
+        min_improvement=0.0,
+    )
+
+    fit = EvaluationWorkspace(context).infer(_candidate((0, 1, 2, 3), (0, 1)))
+
+    assert tuple(column.pattern for column in fit.columns) == (PatternKind.ADDITIVE,) * 2
+    assert all(column.error == pytest.approx(0.0, abs=1e-12) for column in fit.columns)
+    assert all(column.parameter_scale is ParameterScale.RAW for column in fit.columns)
+    assert all(
+        dict(column.diagnostics)["residual_normalization"] == "global_robust_range"
+        for column in fit.columns
+    )
+
+
+def test_observationally_equivalent_joint_patterns_are_reported_as_ambiguous() -> None:
+    values = [1.0, 2.0, 4.0, 8.0]
+    table = pa.table({"first": pa.array(values), "second": pa.array(values)})
+    context = _context(
+        table,
+        _numeric_columns("first", "second"),
+        patterns=(
+            PatternKind.CONSTANT,
+            PatternKind.ADDITIVE,
+            PatternKind.MULTIPLICATIVE,
+        ),
+        min_improvement=0.0,
+    )
+
+    fit = EvaluationWorkspace(context).infer(_candidate((0, 1, 2, 3), (0, 1)))
+
+    for column in fit.columns:
+        details = dict(column.diagnostics)
+        assert details["model_ambiguous"] is True
+        assert details["model_error_margin"] == pytest.approx(0.0, abs=1e-12)
+        assert details["model_equivalents"] == "ADDITIVE,MULTIPLICATIVE"
+
+
+def test_positive_affine_relation_is_not_reported_as_an_exact_joint_model() -> None:
+    first = np.asarray([1.0, 2.0, 3.0, 4.0])
+    table = pa.table(
+        {
+            "first": pa.array(first),
+            "second": pa.array(10.0 * first + 7.0),
+        }
+    )
+    context = _context(
+        table,
+        _numeric_columns("first", "second"),
+        patterns=(PatternKind.ADDITIVE, PatternKind.MULTIPLICATIVE),
+        min_improvement=0.0,
+    )
+
+    fit = EvaluationWorkspace(context).infer(_candidate((0, 1, 2, 3), (0, 1)))
+
+    assert all(
+        alternative.error > 0.0
+        for column in fit.columns
+        for alternative in column.alternatives
+        if alternative.pattern in {PatternKind.ADDITIVE, PatternKind.MULTIPLICATIVE}
     )
 
 

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+import numpy.random as npr
 
 from salvi.domain.enums import ColumnKind, PatternKind, PatternScope
 from salvi.domain.models import (
@@ -19,6 +21,7 @@ from salvi.domain.models import (
 
 if TYPE_CHECKING:
     from salvi.application.context import RunContext
+    from salvi.domain.search import ArchiveCellTarget
     from salvi.patterns.catalog import PatternCatalog
 
 
@@ -103,6 +106,18 @@ class ColumnPatternFitter(Protocol):
     ) -> PatternCandidateFit: ...
 
 
+@runtime_checkable
+class BatchColumnPatternFitter(Protocol):
+    """Optional fast path for fitting several independent columns together."""
+
+    def fit_columns(
+        self,
+        context: RunContext,
+        bicluster: Bicluster,
+        column_indices: Sequence[int] | None = None,
+    ) -> Sequence[PatternCandidateFit]: ...
+
+
 class GroupPatternFitter(Protocol):
     @property
     def definition(self) -> PatternDefinition: ...
@@ -113,6 +128,80 @@ class GroupPatternFitter(Protocol):
         bicluster: Bicluster,
         column_indices: Sequence[int],
     ) -> GroupPatternProposal: ...
+
+
+class GroupPatternCandidateGenerator(Protocol):
+    """Propose bounded candidate subsets using one pattern's own invariants."""
+
+    @property
+    def pattern(self) -> PatternKind: ...
+
+    def propose(
+        self,
+        context: RunContext,
+        bicluster: Bicluster,
+        column_indices: Sequence[int],
+        *,
+        minimum_columns: int,
+    ) -> Sequence[tuple[int, ...]]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PatternSeedShape:
+    """A feasible candidate shape selected inside requested cardinality ranges."""
+
+    row_count: int
+    column_count: int
+
+    def __post_init__(self) -> None:
+        if self.row_count < 1 or self.column_count < 1:
+            raise ValueError("pattern seed cardinalities must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class PatternSeed:
+    """Membership proposed by one pattern-specific seeding strategy."""
+
+    rows: tuple[int, ...]
+    columns: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if tuple(sorted(set(self.rows))) != self.rows:
+            raise ValueError("pattern seed rows must be sorted and unique")
+        if tuple(sorted(set(self.columns))) != self.columns:
+            raise ValueError("pattern seed columns must be sorted and unique")
+
+
+class PatternSeedStrategy(Protocol):
+    """Project archive regions and seed memberships using pattern semantics."""
+
+    @property
+    def pattern(self) -> PatternKind: ...
+
+    def project_shape(
+        self,
+        context: RunContext,
+        *,
+        preferred_row_count: int,
+        row_range: tuple[int, int],
+        preferred_column_count: int,
+        column_range: tuple[int, int],
+    ) -> PatternSeedShape | None: ...
+
+    def project_target(
+        self,
+        context: RunContext,
+        target: ArchiveCellTarget,
+    ) -> PatternSeedShape | None: ...
+
+    def generate(
+        self,
+        context: RunContext,
+        generator: npr.Generator,
+        shape: PatternSeedShape,
+        *,
+        joint_column_candidate_pool_size: int,
+    ) -> PatternSeed: ...
 
 
 class PatternContrastStrategy(Protocol):
@@ -134,12 +223,18 @@ class PatternImplementation:
     contrast_strategy: PatternContrastStrategy
     column_fitter: ColumnPatternFitter | None = None
     group_fitter: GroupPatternFitter | None = None
+    group_candidate_generator: GroupPatternCandidateGenerator | None = None
+    seed_strategy: PatternSeedStrategy | None = None
 
     def __post_init__(self) -> None:
         if self.contrast_strategy.pattern is not self.definition.kind:
             raise ValueError("contrast strategy must match its pattern registration")
         if self.definition.scope is PatternScope.COLUMN:
-            if self.column_fitter is None or self.group_fitter is not None:
+            if (
+                self.column_fitter is None
+                or self.group_fitter is not None
+                or self.group_candidate_generator is not None
+            ):
                 raise ValueError("column patterns require one column fitter")
             if self.column_fitter.definition != self.definition:
                 raise ValueError("column fitter definition must match its registration")
@@ -147,6 +242,16 @@ class PatternImplementation:
             raise ValueError("subset patterns require one group fitter")
         elif self.group_fitter.definition != self.definition:
             raise ValueError("group fitter definition must match its registration")
+        elif (
+            self.group_candidate_generator is not None
+            and self.group_candidate_generator.pattern is not self.definition.kind
+        ):
+            raise ValueError("group candidate generator must match its pattern registration")
+        if (
+            self.seed_strategy is not None
+            and self.seed_strategy.pattern is not self.definition.kind
+        ):
+            raise ValueError("seed strategy must match its pattern registration")
 
 
 class MixedPatternAssignmentStrategy(Protocol):
@@ -176,7 +281,9 @@ class PatternContrastEvaluator(Protocol):
 
 
 __all__ = [
+    "BatchColumnPatternFitter",
     "ColumnPatternFitter",
+    "GroupPatternCandidateGenerator",
     "GroupPatternFitter",
     "GroupPatternProposal",
     "MixedPatternAssignmentStrategy",
@@ -185,4 +292,7 @@ __all__ = [
     "PatternDefinition",
     "PatternImplementation",
     "PatternInferenceEngine",
+    "PatternSeed",
+    "PatternSeedShape",
+    "PatternSeedStrategy",
 ]

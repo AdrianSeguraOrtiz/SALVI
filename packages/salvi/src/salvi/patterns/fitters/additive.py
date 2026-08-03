@@ -23,12 +23,18 @@ from salvi.patterns.fitters.common import (
     maximum_parameter_change,
     rejected_group,
 )
-from salvi.patterns.joint_models import additive_row_effects
-from salvi.patterns.math import clamp01, diagnostics
+from salvi.patterns.joint_models import (
+    additive_row_effects,
+    normalized_absolute_residuals,
+    robust_column_scales,
+)
+from salvi.patterns.math import clamp01, diagnostics, nanmedian_2d
 
 
 @dataclass(frozen=True, slots=True)
 class AdditivePatternFitter:
+    """Fit the strict additive model ``x_ij = alpha_i + beta_j``."""
+
     definition: PatternDefinition = field(
         default_factory=lambda: PatternDefinition(
             kind=PatternKind.ADDITIVE,
@@ -66,19 +72,21 @@ class AdditivePatternFitter:
             dtype=np.int64,
         )
         column_array = np.asarray(columns, dtype=np.int64)
-        matrix = dataset.numeric_matrix(standardized=True)[np.ix_(rows, positions)]
+        matrix = dataset.numeric_matrix()[np.ix_(rows, positions)]
+        scales = robust_column_scales(context, columns)
         source = dataset.support_matrix()[np.ix_(rows, column_array)]
         source_support = np.count_nonzero(source, axis=0)
-        for position, column_index in enumerate(columns):
-            if not context.evaluation_support_policy.is_sufficient(
-                int(source_support[position]), len(rows)
-            ):
-                return rejected_group(
-                    PatternKind.ADDITIVE,
-                    column_index,
-                    issue_code=EvaluationIssueCode.INSUFFICIENT_LOCAL_SUPPORT,
-                    reason="insufficient original observations for additive fitting",
-                )
+        required_row_support = context.evaluation_support_policy.required_observations(
+            len(rows)
+        )
+        insufficient = np.flatnonzero(source_support < required_row_support)
+        if insufficient.size:
+            return rejected_group(
+                PatternKind.ADDITIVE,
+                columns[int(insufficient[0])],
+                issue_code=EvaluationIssueCode.INSUFFICIENT_LOCAL_SUPPORT,
+                reason="insufficient original observations for additive fitting",
+            )
 
         finite_counts = np.count_nonzero(np.isfinite(matrix), axis=0)
         empty = np.flatnonzero(finite_counts == 0)
@@ -89,9 +97,7 @@ class AdditivePatternFitter:
                 issue_code=EvaluationIssueCode.PATTERN_FIT_FAILED,
                 reason="no values are available for additive fitting",
             )
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            beta = np.nanmedian(matrix, axis=0)
+        beta = nanmedian_2d(matrix, axis=0)
 
         alpha = np.full(len(rows), np.nan, dtype=np.float64)
         iterations = 0
@@ -111,7 +117,9 @@ class AdditivePatternFitter:
                 center = float(np.median(finite_alpha))
                 next_alpha[np.isfinite(next_alpha)] -= center
                 next_beta += center
-            change = maximum_parameter_change(alpha, beta, next_alpha, next_beta)
+            change = maximum_parameter_change(alpha, beta, next_alpha, next_beta) / float(
+                np.median(scales)
+            )
             alpha = next_alpha
             beta = next_beta
             iterations = iteration + 1
@@ -125,19 +133,19 @@ class AdditivePatternFitter:
         source_counts = np.count_nonzero(usable_matrix & source, axis=0)
         residual_matrix = np.where(
             usable_matrix,
-            np.minimum(
-                1.0,
-                np.abs(matrix - alpha[:, np.newaxis] - beta[np.newaxis, :]),
+            normalized_absolute_residuals(
+                matrix - alpha[:, np.newaxis] - beta[np.newaxis, :],
+                scales,
             ),
             np.nan,
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             errors = np.nanmean(residual_matrix, axis=0)
+        insufficient = np.flatnonzero(source_counts < required_row_support)
+        rejected_position = int(insufficient[0]) if insufficient.size else None
         for position, column_index in enumerate(columns):
-            available_count = int(available_counts[position])
-            source_count = int(source_counts[position])
-            if not context.evaluation_support_policy.is_sufficient(source_count, len(rows)):
+            if position == rejected_position:
                 return rejected_group(
                     PatternKind.ADDITIVE,
                     column_index,
@@ -145,6 +153,8 @@ class AdditivePatternFitter:
                     reason="insufficient fitted additive residual support",
                     fits=tuple(fits),
                 )
+            available_count = int(available_counts[position])
+            source_count = int(source_counts[position])
             fits.append(
                 (
                     column_index,
@@ -152,12 +162,14 @@ class AdditivePatternFitter:
                         pattern=PatternKind.ADDITIVE,
                         error=clamp01(float(errors[position])),
                         parameter=float(beta[position]),
-                        parameter_scale=ParameterScale.ROBUST_STANDARDIZED,
+                        parameter_scale=ParameterScale.RAW,
                         source_support=source_count,
                         available_support=available_count,
                         diagnostics=diagnostics(
                             converged=converged,
                             iterations=iterations,
+                            numeric_scale=float(scales[position]),
+                            residual_normalization="global_robust_range",
                         ),
                     ),
                 )
@@ -175,8 +187,10 @@ class AdditivePatternFitter:
             iterations=iterations,
             converged=converged,
             diagnostics=diagnostics(
+                fit_space="raw",
                 selected_rows=len(rows),
                 fitted_row_effects=len(row_parameters),
+                residual_normalization="per_column_global_robust_range",
             ),
         )
         return GroupPatternProposal(PatternKind.ADDITIVE, tuple(fits), group)
@@ -191,16 +205,15 @@ class AdditivePatternFitter:
     ) -> tuple[npt.NDArray[np.float64], int | None]:
         usable = np.isfinite(matrix) & np.isfinite(alpha)[:, np.newaxis]
         original = np.count_nonzero(usable & source, axis=0)
-        for position, column_index in enumerate(columns):
-            if not context.evaluation_support_policy.is_sufficient(
-                int(original[position]),
-                matrix.shape[0],
-            ):
-                return np.full(matrix.shape[1], np.nan, dtype=np.float64), column_index
+        required = context.evaluation_support_policy.required_observations(matrix.shape[0])
+        insufficient = np.flatnonzero(original < required)
+        if insufficient.size:
+            return (
+                np.full(matrix.shape[1], np.nan, dtype=np.float64),
+                columns[int(insufficient[0])],
+            )
         residuals = np.where(usable, matrix - alpha[:, np.newaxis], np.nan)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            return np.nanmedian(residuals, axis=0), None
+        return nanmedian_2d(residuals, axis=0), None
 
 
 __all__ = ["AdditivePatternFitter"]

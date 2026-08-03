@@ -66,6 +66,15 @@ def default_pattern_catalog(
         ConstantPatternFitter,
         MultiplicativePatternFitter,
     )
+    from salvi.patterns.group_discovery import (
+        AdditiveNeighborhoodGenerator,
+        MultiplicativeNeighborhoodGenerator,
+    )
+    from salvi.patterns.seeding import (
+        AdditivePatternSeedStrategy,
+        ConstantPatternSeedStrategy,
+        MultiplicativePatternSeedStrategy,
+    )
 
     selected = frozenset(PatternKind) if allowed is None else frozenset(allowed)
     constant = ConstantPatternFitter()
@@ -74,6 +83,7 @@ def default_pattern_catalog(
             definition=constant.definition,
             contrast_strategy=ConstantPatternContrastStrategy(),
             column_fitter=constant,
+            seed_strategy=ConstantPatternSeedStrategy(constant.definition),
         )
     ]
     if PatternKind.ADDITIVE in selected:
@@ -83,6 +93,8 @@ def default_pattern_catalog(
                 definition=additive.definition,
                 contrast_strategy=AdditivePatternContrastStrategy(),
                 group_fitter=additive,
+                group_candidate_generator=AdditiveNeighborhoodGenerator(),
+                seed_strategy=AdditivePatternSeedStrategy(additive.definition),
             )
         )
     if PatternKind.MULTIPLICATIVE in selected:
@@ -92,6 +104,8 @@ def default_pattern_catalog(
                 definition=multiplicative.definition,
                 contrast_strategy=MultiplicativePatternContrastStrategy(),
                 group_fitter=multiplicative,
+                group_candidate_generator=MultiplicativeNeighborhoodGenerator(),
+                seed_strategy=MultiplicativePatternSeedStrategy(multiplicative.definition),
             )
         )
     return PatternCatalog(implementations)

@@ -153,6 +153,16 @@ def test_descriptor_domains_allow_axis_specific_discretization(run_context: obje
     )
     assert custom.index(3.0) == 1
 
+    geometric = AxisBinner(
+        descriptor="column_cardinality",
+        strategy=BinningStrategy.GEOMETRIC,
+        minimum=10.0,
+        maximum=23.0,
+        bin_count=8,
+    )
+    assert geometric.integer_bounds(0) == (10, 11)
+    assert geometric.representative_integer(0) == 11
+
 
 def test_archive_enumerates_every_reachable_cardinality_cell(run_context: object) -> None:
     archive = _archive(run_context)
@@ -163,6 +173,10 @@ def test_archive_enumerates_every_reachable_cardinality_cell(run_context: object
         (rows, columns) for rows in range(2, 5) for columns in range(2, 4)
     }
     assert len({target.coordinate.indices for target in targets}) == len(targets)
+    assert all(target.row_range == (target.row_count, target.row_count) for target in targets)
+    assert all(
+        target.column_range == (target.column_count, target.column_count) for target in targets
+    )
 
 
 def test_axis_configuration_rejects_ambiguous_shapes() -> None:
