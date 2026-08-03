@@ -438,6 +438,7 @@ def test_bicluster_set_round_trip_with_pattern_details(tmp_path: Path) -> None:
     assert manifest.column_patterns_file == "column-patterns.parquet"
     assert manifest.column_objectives_file == "column-objectives.parquet"
     contents = BiclusterSetReader().read_contents(destination)
+    structures = BiclusterSetReader().read_structures(destination)
     assert contents.columns == _prepared_columns(3)
     assert contents.repertoire.evaluations[0].candidate == candidate
     assert contents.repertoire.evaluations[0].objectives[0].value == pytest.approx(0.1)
@@ -456,6 +457,16 @@ def test_bicluster_set_round_trip_with_pattern_details(tmp_path: Path) -> None:
     assert contents.pattern_groups[0].column_indices == (1, 2)
     assert contents.row_parameters[0].value == pytest.approx(-0.5)
     assert contents.repertoire.evaluations[0].pattern_fit == pattern_fit
+    assert structures.manifest == contents.manifest
+    assert structures.columns == contents.columns
+    assert len(structures.biclusters) == 1
+    assert structures.biclusters[0].identifier == candidate.identifier
+    assert structures.biclusters[0].bicluster == candidate.bicluster
+    assert structures.biclusters[0].column_patterns == (
+        (0, PatternKind.CONSTANT),
+        (1, PatternKind.ADDITIVE),
+        (2, PatternKind.ADDITIVE),
+    )
     paged = PagedBiclusterSetReader(destination)
     assert paged.row_count == 1
     assert paged.columns == _prepared_columns(3)

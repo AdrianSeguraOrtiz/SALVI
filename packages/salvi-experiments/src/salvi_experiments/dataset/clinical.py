@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Annotated, Literal, Self
 
 import numpy as np
+import numpy.typing as npt
 from pydantic import Field, ValidationError, model_validator
 from scipy.optimize import linear_sum_assignment
+from scipy.sparse import csr_matrix
 from scipy.stats import chi2, chi2_contingency, fisher_exact, mannwhitneyu
 
 from salvi import BiclusterSetReader, DatasetBundleReader
@@ -80,6 +82,12 @@ class StabilityConfiguration(FrozenExperimentModel):
         if not self.thresholds or tuple(sorted(set(self.thresholds))) != self.thresholds:
             raise ValueError("stability thresholds must be sorted and unique")
         return self
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceStabilityAnalysis:
+    repertoire_comparisons: tuple[dict[str, object], ...]
+    biclusters: tuple[dict[str, object], ...]
 
 
 def load_clinical_validation_configuration(path: str | Path) -> ClinicalValidationConfiguration:
@@ -510,29 +518,33 @@ class _Structure:
     patterns: Mapping[str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class _EncodedRepertoire:
+    identifiers: tuple[str, ...]
+    rows: csr_matrix
+    columns: csr_matrix
+    pattern_columns: tuple[csr_matrix, ...]
+
+
 def _structures(reference: RepertoireReference) -> tuple[_Structure, ...]:
     dataset = DatasetBundleReader().load(reference.dataset_bundle)
-    contents = BiclusterSetReader().read_contents(reference.bicluster_set)
+    contents = BiclusterSetReader().read_structures(reference.bicluster_set)
     row_ids = tuple(str(value) for value in dataset.row_identifiers.to_pylist())
     structures = []
-    for evaluation in contents.repertoire.evaluations:
-        rows = frozenset(row_ids[index] for index in evaluation.candidate.bicluster.row_indices)
+    for record in contents.biclusters:
+        rows = frozenset(row_ids[index] for index in record.bicluster.row_indices)
         columns = frozenset(
-            contents.columns[index].name for index in evaluation.candidate.bicluster.column_indices
+            contents.columns[index].name for index in record.bicluster.column_indices
         )
-        patterns = (
-            {}
-            if evaluation.pattern_fit is None
-            else {
-                contents.columns[column.column_index].name: (
-                    "UNASSIGNED" if column.pattern is None else column.pattern.value
-                )
-                for column in evaluation.pattern_fit.columns
-            }
-        )
+        patterns = {
+            contents.columns[index].name: (
+                "UNASSIGNED" if pattern is None else pattern.value
+            )
+            for index, pattern in record.column_patterns
+        }
         structures.append(
             _Structure(
-                identifier=evaluation.candidate.identifier,
+                identifier=record.identifier,
                 rows=rows,
                 columns=columns,
                 patterns=patterns,
@@ -541,51 +553,162 @@ def _structures(reference: RepertoireReference) -> tuple[_Structure, ...]:
     return tuple(structures)
 
 
-def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
-    union = left | right
-    return 1.0 if not union else len(left & right) / len(union)
+def _encode_structures(
+    groups: Mapping[str, Sequence[_Structure]],
+) -> dict[str, _EncodedRepertoire]:
+    all_structures = tuple(structure for values in groups.values() for structure in values)
+    row_positions = {
+        value: index
+        for index, value in enumerate(
+            sorted({row for structure in all_structures for row in structure.rows})
+        )
+    }
+    column_positions = {
+        value: index
+        for index, value in enumerate(
+            sorted({column for structure in all_structures for column in structure.columns})
+        )
+    }
+    missing_pattern = "__MISSING_PATTERN__"
+    pattern_positions = {
+        value: index
+        for index, value in enumerate(
+            sorted(
+                {
+                    structure.patterns.get(column, missing_pattern)
+                    for structure in all_structures
+                    for column in structure.columns
+                }
+            )
+        )
+    }
+
+    def incidence(
+        structures: Sequence[_Structure],
+        positions: Mapping[str, int],
+        values: Sequence[frozenset[str]],
+    ) -> csr_matrix:
+        row_indices: list[int] = []
+        column_indices: list[int] = []
+        for row, selected in enumerate(values):
+            row_indices.extend([row] * len(selected))
+            column_indices.extend(positions[value] for value in selected)
+        data = np.ones(len(row_indices), dtype=np.int32)
+        return csr_matrix(
+            (data, (row_indices, column_indices)),
+            shape=(len(structures), len(positions)),
+            dtype=np.int32,
+        )
+
+    encoded: dict[str, _EncodedRepertoire] = {}
+    for identifier, structures in groups.items():
+        pattern_matrices = []
+        for pattern in pattern_positions:
+            selected = tuple(
+                frozenset(
+                    column
+                    for column in structure.columns
+                    if structure.patterns.get(column, missing_pattern) == pattern
+                )
+                for structure in structures
+            )
+            pattern_matrices.append(incidence(structures, column_positions, selected))
+        encoded[identifier] = _EncodedRepertoire(
+            identifiers=tuple(structure.identifier for structure in structures),
+            rows=incidence(
+                structures,
+                row_positions,
+                tuple(structure.rows for structure in structures),
+            ),
+            columns=incidence(
+                structures,
+                column_positions,
+                tuple(structure.columns for structure in structures),
+            ),
+            pattern_columns=tuple(pattern_matrices),
+        )
+    return encoded
 
 
-def _pattern_concordance(
-    left: Mapping[str, str],
-    right: Mapping[str, str],
-    shared_columns: frozenset[str],
-) -> float:
-    if not shared_columns:
-        return 0.0
-    return sum(left.get(column) == right.get(column) for column in shared_columns) / len(
-        shared_columns
+def _intersection_counts(
+    left: csr_matrix,
+    right: csr_matrix,
+) -> npt.NDArray[np.float64]:
+    return np.asarray((left @ right.transpose()).toarray(), dtype=np.float64)
+
+
+def _jaccard_scores(
+    left: csr_matrix,
+    right: csr_matrix,
+    intersections: npt.NDArray[np.float64],
+) -> npt.NDArray[np.float64]:
+    left_sizes = np.asarray(left.sum(axis=1), dtype=np.float64).reshape(-1, 1)
+    right_sizes = np.asarray(right.sum(axis=1), dtype=np.float64).reshape(1, -1)
+    unions = left_sizes + right_sizes - intersections
+    result = np.ones_like(intersections)
+    np.divide(
+        intersections,
+        unions,
+        out=result,
+        where=unions > 0,
     )
+    return result
 
 
 def _stability_scores(
-    left: Sequence[_Structure],
-    right: Sequence[_Structure],
-) -> np.ndarray:
-    scores = np.zeros((len(left), len(right)), dtype=np.float64)
-    for row, left_structure in enumerate(left):
-        for column, right_structure in enumerate(right):
-            row_score = _jaccard(left_structure.rows, right_structure.rows)
-            column_score = _jaccard(left_structure.columns, right_structure.columns)
-            shared_columns = left_structure.columns & right_structure.columns
-            scores[row, column] = math.sqrt(row_score * column_score) * _pattern_concordance(
-                left_structure.patterns,
-                right_structure.patterns,
-                shared_columns,
-            )
+    left: _EncodedRepertoire,
+    right: _EncodedRepertoire,
+) -> npt.NDArray[np.float64]:
+    row_intersections = _intersection_counts(left.rows, right.rows)
+    column_intersections = _intersection_counts(left.columns, right.columns)
+    row_scores = _jaccard_scores(left.rows, right.rows, row_intersections)
+    column_scores = _jaccard_scores(left.columns, right.columns, column_intersections)
+    matching_patterns = np.zeros_like(column_intersections)
+    for left_pattern, right_pattern in zip(
+        left.pattern_columns,
+        right.pattern_columns,
+        strict=True,
+    ):
+        matching_patterns += _intersection_counts(left_pattern, right_pattern)
+    pattern_scores = np.divide(
+        matching_patterns,
+        column_intersections,
+        out=np.zeros_like(matching_patterns),
+        where=column_intersections > 0,
+    )
+    scores: npt.NDArray[np.float64] = np.sqrt(row_scores * column_scores)
+    scores *= pattern_scores
     return scores
 
 
-def _matched_scores_by_left(
-    left: Sequence[_Structure],
-    right: Sequence[_Structure],
-) -> np.ndarray:
-    scores = _stability_scores(left, right)
-    matched = np.zeros(len(left), dtype=np.float64)
+def _repertoire_stability_record(
+    left_identifier: str,
+    right_identifier: str,
+    left_count: int,
+    right_count: int,
+    scores: np.ndarray,
+    settings: StabilityConfiguration,
+) -> dict[str, object]:
     if scores.size:
         row_indices, column_indices = linear_sum_assignment(-scores)
-        matched[row_indices] = scores[row_indices, column_indices]
-    return matched
+        matched = scores[row_indices, column_indices]
+    else:
+        matched = np.asarray([], dtype=np.float64)
+    record: dict[str, object] = {
+        "left": left_identifier,
+        "right": right_identifier,
+        "left_count": left_count,
+        "right_count": right_count,
+        "matched_count": int(matched.size),
+        "mean_matched_stability": float(matched.mean()) if matched.size else 0.0,
+        "median_matched_stability": float(np.median(matched)) if matched.size else 0.0,
+    }
+    denominator = max(left_count, right_count, 1)
+    for threshold in settings.thresholds:
+        record[f"coverage_at_{threshold:g}".replace(".", "_")] = (
+            int(np.count_nonzero(matched >= threshold)) / denominator
+        )
+    return record
 
 
 def calculate_repertoire_stability(
@@ -596,34 +719,88 @@ def calculate_repertoire_stability(
     settings = configuration or StabilityConfiguration()
     if len(references) < 2:
         raise ValueError("repertoire stability requires at least two results")
-    loaded = {reference.identifier: _structures(reference) for reference in references}
+    loaded = _encode_structures(
+        {reference.identifier: _structures(reference) for reference in references}
+    )
     records: list[dict[str, object]] = []
     for left_index, left_reference in enumerate(references):
         for right_reference in references[left_index + 1 :]:
             left = loaded[left_reference.identifier]
             right = loaded[right_reference.identifier]
             scores = _stability_scores(left, right)
-            if scores.size:
-                row_indices, column_indices = linear_sum_assignment(-scores)
-                matched = scores[row_indices, column_indices]
-            else:
-                matched = np.asarray([], dtype=np.float64)
-            record: dict[str, object] = {
-                "left": left_reference.identifier,
-                "right": right_reference.identifier,
-                "left_count": len(left),
-                "right_count": len(right),
-                "matched_count": int(matched.size),
-                "mean_matched_stability": (float(matched.mean()) if matched.size else 0.0),
-                "median_matched_stability": (float(np.median(matched)) if matched.size else 0.0),
-            }
-            denominator = max(len(left), len(right), 1)
-            for threshold in settings.thresholds:
-                record[f"coverage_at_{threshold:g}".replace(".", "_")] = (
-                    int(np.count_nonzero(matched >= threshold)) / denominator
+            records.append(
+                _repertoire_stability_record(
+                    left_reference.identifier,
+                    right_reference.identifier,
+                    len(left.identifiers),
+                    len(right.identifiers),
+                    scores,
+                    settings,
                 )
-            records.append(record)
+            )
     return tuple(records)
+
+
+def calculate_reference_stability(
+    reference: RepertoireReference,
+    comparisons: Sequence[RepertoireReference],
+    *,
+    configuration: StabilityConfiguration | None = None,
+    bicluster_threshold: float = 0.5,
+) -> ReferenceStabilityAnalysis:
+    if not comparisons:
+        raise ValueError("reference stability requires at least one comparison")
+    if not 0.0 < bicluster_threshold <= 1.0:
+        raise ValueError("reference stability threshold must be in (0, 1]")
+    settings = configuration or StabilityConfiguration()
+    raw = {
+        reference.identifier: _structures(reference),
+        **{comparison.identifier: _structures(comparison) for comparison in comparisons},
+    }
+    loaded = _encode_structures(raw)
+    reference_structures = loaded[reference.identifier]
+    repertoire_records: list[dict[str, object]] = []
+    matched_rows = []
+    for comparison in comparisons:
+        comparison_structures = loaded[comparison.identifier]
+        scores = _stability_scores(reference_structures, comparison_structures)
+        repertoire_records.append(
+            _repertoire_stability_record(
+                reference.identifier,
+                comparison.identifier,
+                len(reference_structures.identifiers),
+                len(comparison_structures.identifiers),
+                scores,
+                settings,
+            )
+        )
+        matched = np.zeros(len(reference_structures.identifiers), dtype=np.float64)
+        if scores.size:
+            row_indices, column_indices = linear_sum_assignment(-scores)
+            matched[row_indices] = scores[row_indices, column_indices]
+        matched_rows.append(matched)
+    matched_by_comparison = np.vstack(matched_rows)
+    bicluster_records: list[dict[str, object]] = []
+    for index, identifier in enumerate(reference_structures.identifiers):
+        scores = matched_by_comparison[:, index]
+        bicluster_records.append(
+            {
+                "reference": reference.identifier,
+                "bicluster_id": identifier,
+                "comparison_count": len(comparisons),
+                "match_threshold": bicluster_threshold,
+                "matched_count": int(np.count_nonzero(scores >= bicluster_threshold)),
+                "support_fraction": float(np.mean(scores >= bicluster_threshold)),
+                "mean_matched_stability": float(np.mean(scores)),
+                "median_matched_stability": float(np.median(scores)),
+                "minimum_matched_stability": float(np.min(scores)),
+                "maximum_matched_stability": float(np.max(scores)),
+            }
+        )
+    return ReferenceStabilityAnalysis(
+        repertoire_comparisons=tuple(repertoire_records),
+        biclusters=tuple(bicluster_records),
+    )
 
 
 def calculate_reference_bicluster_stability(
@@ -632,35 +809,11 @@ def calculate_reference_bicluster_stability(
     *,
     threshold: float = 0.5,
 ) -> tuple[dict[str, object], ...]:
-    if not comparisons:
-        raise ValueError("reference stability requires at least one comparison")
-    if not 0.0 < threshold <= 1.0:
-        raise ValueError("reference stability threshold must be in (0, 1]")
-    reference_structures = _structures(reference)
-    matched_by_comparison = np.vstack(
-        [
-            _matched_scores_by_left(reference_structures, _structures(comparison))
-            for comparison in comparisons
-        ]
-    )
-    records: list[dict[str, object]] = []
-    for index, structure in enumerate(reference_structures):
-        scores = matched_by_comparison[:, index]
-        records.append(
-            {
-                "reference": reference.identifier,
-                "bicluster_id": structure.identifier,
-                "comparison_count": len(comparisons),
-                "match_threshold": threshold,
-                "matched_count": int(np.count_nonzero(scores >= threshold)),
-                "support_fraction": float(np.mean(scores >= threshold)),
-                "mean_matched_stability": float(np.mean(scores)),
-                "median_matched_stability": float(np.median(scores)),
-                "minimum_matched_stability": float(np.min(scores)),
-                "maximum_matched_stability": float(np.max(scores)),
-            }
-        )
-    return tuple(records)
+    return calculate_reference_stability(
+        reference,
+        comparisons,
+        bicluster_threshold=threshold,
+    ).biclusters
 
 
 def run_clinical_validation(
@@ -726,11 +879,13 @@ def run_clinical_validation(
 __all__ = [
     "ClinicalTestingConfiguration",
     "ClinicalValidationConfiguration",
+    "ReferenceStabilityAnalysis",
     "RepertoireReference",
     "StabilityConfiguration",
     "adjust_clinical_association_fdr",
     "calculate_clinical_associations",
     "calculate_reference_bicluster_stability",
+    "calculate_reference_stability",
     "calculate_repertoire_stability",
     "characterize_biclusters",
     "load_clinical_validation_configuration",

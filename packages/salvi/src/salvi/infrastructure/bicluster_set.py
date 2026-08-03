@@ -193,6 +193,31 @@ class BiclusterSetContents(FrozenModel):
     final_selection: tuple[FinalSelectionRecord, ...] = ()
 
 
+class BiclusterStructureRecord(FrozenModel):
+    """Membership and pattern labels needed by structural analyses."""
+
+    identifier: str = Field(min_length=1)
+    bicluster: Bicluster
+    column_patterns: tuple[tuple[int, PatternKind | None], ...] = ()
+
+    @model_validator(mode="after")
+    def validate_column_patterns(self) -> Self:
+        indices = tuple(index for index, _pattern in self.column_patterns)
+        if tuple(sorted(set(indices))) != indices:
+            raise ValueError("structural column patterns must be sorted and unique")
+        if not set(indices).issubset(self.bicluster.column_indices):
+            raise ValueError("structural patterns must reference selected columns")
+        return self
+
+
+class BiclusterSetStructures(FrozenModel):
+    """Lightweight, validated structural projection of a BiclusterSet."""
+
+    manifest: BiclusterSetManifest
+    columns: tuple[PreparedColumnMetadata, ...]
+    biclusters: tuple[BiclusterStructureRecord, ...]
+
+
 def _json(value: object) -> str:
     if isinstance(value, tuple):
         value = list(value)
@@ -556,6 +581,44 @@ class BiclusterSetReader:
     def read(self, directory: Path) -> Repertoire:
         return self.read_contents(directory).repertoire
 
+    def read_structures(self, directory: Path) -> BiclusterSetStructures:
+        """Read memberships and pattern labels without rebuilding scientific evaluations."""
+
+        root = directory.resolve()
+        manifest = self.read_manifest(root)
+        try:
+            columns = self._read_columns(root, manifest)
+            core_records = pq.read_table(
+                root / manifest.biclusters_file,
+                columns=["bicluster_id", "row_indices", "column_indices"],
+            ).to_pylist()
+            pattern_records = (
+                []
+                if manifest.column_patterns_file is None
+                else pq.read_table(
+                    root / manifest.column_patterns_file,
+                    columns=["bicluster_id", "column_index", "pattern"],
+                ).to_pylist()
+            )
+            structures = self._assemble_structures(core_records, pattern_records, manifest)
+        except ArtifactError:
+            raise
+        except (
+            AttributeError,
+            IndexError,
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+            pa.ArrowException,
+        ) as error:
+            raise ArtifactError(f"invalid BiclusterSet structural contents: {error}") from error
+        return BiclusterSetStructures(
+            manifest=manifest,
+            columns=columns,
+            biclusters=structures,
+        )
+
     def read_contents(self, directory: Path) -> BiclusterSetContents:
         root = directory.resolve()
         manifest = self.read_manifest(root)
@@ -687,6 +750,57 @@ class BiclusterSetReader:
             groups,
             row_parameters,
             final_selection,
+        )
+
+    @staticmethod
+    def _assemble_structures(
+        core_records: list[dict[str, Any]],
+        pattern_records: list[dict[str, Any]],
+        manifest: BiclusterSetManifest,
+    ) -> tuple[BiclusterStructureRecord, ...]:
+        identifiers = tuple(str(record["bicluster_id"]) for record in core_records)
+        if any(not identifier for identifier in identifiers) or len(set(identifiers)) != len(
+            identifiers
+        ):
+            raise ArtifactError("BiclusterSet bicluster identifiers are invalid or duplicated")
+
+        selected_columns: dict[str, frozenset[int]] = {}
+        biclusters: dict[str, Bicluster] = {}
+        for identifier, record in zip(identifiers, core_records, strict=True):
+            bicluster = Bicluster(
+                row_indices=tuple(int(value) for value in record["row_indices"]),
+                column_indices=tuple(int(value) for value in record["column_indices"]),
+            )
+            if (
+                bicluster.row_indices[-1] >= manifest.row_count
+                or bicluster.column_indices[-1] >= manifest.column_count
+            ):
+                raise ArtifactError("persisted BiclusterSet indices exceed dataset dimensions")
+            biclusters[identifier] = bicluster
+            selected_columns[identifier] = frozenset(bicluster.column_indices)
+
+        patterns_by_identifier: dict[str, dict[int, PatternKind | None]] = defaultdict(dict)
+        for record in pattern_records:
+            identifier = str(record["bicluster_id"])
+            if identifier not in biclusters:
+                raise ArtifactError("column-pattern records reference unknown biclusters")
+            column_index = int(record["column_index"])
+            if column_index not in selected_columns[identifier]:
+                raise ArtifactError("column-pattern records reference unselected columns")
+            if column_index in patterns_by_identifier[identifier]:
+                raise ArtifactError("column-pattern records contain duplicate columns")
+            raw_pattern = record["pattern"]
+            patterns_by_identifier[identifier][column_index] = (
+                None if raw_pattern is None else PatternKind(str(raw_pattern))
+            )
+
+        return tuple(
+            BiclusterStructureRecord(
+                identifier=identifier,
+                bicluster=biclusters[identifier],
+                column_patterns=tuple(sorted(patterns_by_identifier[identifier].items())),
+            )
+            for identifier in identifiers
         )
 
     @staticmethod
@@ -1075,7 +1189,9 @@ __all__ = [
     "BiclusterSetContents",
     "BiclusterSetManifest",
     "BiclusterSetReader",
+    "BiclusterSetStructures",
     "BiclusterSetWriter",
+    "BiclusterStructureRecord",
     "ColumnObjectiveRecord",
     "ColumnPatternRecord",
     "FinalSelectionRecord",

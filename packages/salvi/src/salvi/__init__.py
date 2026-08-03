@@ -33,7 +33,9 @@ from salvi.infrastructure.bicluster_set import (
     BiclusterSetContents,
     BiclusterSetManifest,
     BiclusterSetReader,
+    BiclusterSetStructures,
     BiclusterSetWriter,
+    BiclusterStructureRecord,
 )
 from salvi.infrastructure.dataset_bundle import (
     DatasetBundleReader,
@@ -55,7 +57,9 @@ __all__ = [
     "BiclusterSetContents",
     "BiclusterSetManifest",
     "BiclusterSetReader",
+    "BiclusterSetStructures",
     "BiclusterSetWriter",
+    "BiclusterStructureRecord",
     "Candidate",
     "ConstraintValue",
     "Dataset",

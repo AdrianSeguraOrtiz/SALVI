@@ -26,6 +26,7 @@ from salvi_experiments.dataset.clinical import (
     RepertoireReference,
     calculate_clinical_associations,
     calculate_reference_bicluster_stability,
+    calculate_reference_stability,
     calculate_repertoire_stability,
     run_clinical_validation,
 )
@@ -513,6 +514,22 @@ def test_repertoire_stability_matches_identical_structures(
         ),
     )
     assert per_bicluster[0]["support_fraction"] == pytest.approx(1.0)
+    combined = calculate_reference_stability(
+        RepertoireReference(
+            identifier="first",
+            dataset_bundle=dataset,
+            bicluster_set=first,
+        ),
+        (
+            RepertoireReference(
+                identifier="second",
+                dataset_bundle=dataset,
+                bicluster_set=second,
+            ),
+        ),
+    )
+    assert combined.repertoire_comparisons[0]["mean_matched_stability"] == pytest.approx(1.0)
+    assert combined.biclusters[0]["support_fraction"] == pytest.approx(1.0)
 
     reference = RepertoireReference(
         identifier="first",
