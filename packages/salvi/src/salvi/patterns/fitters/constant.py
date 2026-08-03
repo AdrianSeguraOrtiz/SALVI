@@ -105,9 +105,7 @@ class ConstantPatternFitter:
             if dataset.numeric_positions[int(column)] >= 0
         )
         sufficient_numeric = tuple(
-            entry
-            for entry in numeric_entries
-            if source_supports[entry[0]] >= required_support
+            entry for entry in numeric_entries if source_supports[entry[0]] >= required_support
         )
         if sufficient_numeric:
             offsets = tuple(entry[0] for entry in sufficient_numeric)

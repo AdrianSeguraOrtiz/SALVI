@@ -402,8 +402,7 @@ class CellCoveragePatternAwareInitializer:
             shape = strategy.project_target(context, target)
             if shape is None:
                 raise ComponentError(
-                    f"{pattern.value} seed cannot reach archive cell "
-                    f"{target.coordinate.indices}"
+                    f"{pattern.value} seed cannot reach archive cell {target.coordinate.indices}"
                 )
             seed = strategy.generate(
                 context,

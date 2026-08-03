@@ -401,11 +401,7 @@ def _external_column_compatibilities(
                 losses[column_index].append(
                     min(
                         1.0,
-                        float(
-                            np.mean(
-                                np.abs(values[usable] - alpha[usable] - beta) / scale
-                            )
-                        ),
+                        float(np.mean(np.abs(values[usable] - alpha[usable] - beta) / scale)),
                     )
                 )
             elif group.pattern is PatternKind.MULTIPLICATIVE:

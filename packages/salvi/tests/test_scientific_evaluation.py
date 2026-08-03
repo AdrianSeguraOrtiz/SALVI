@@ -491,9 +491,7 @@ def test_competing_joint_patterns_partition_columns_before_final_refit() -> None
             "additive-a": pa.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]),
             "additive-b": pa.array([20.0, 21.0, 22.0, 23.0, 24.0, 25.0]),
             "multiplicative-a": pa.array(multiplicative_rows),
-            "multiplicative-b": pa.array(
-                [10.0 * value for value in multiplicative_rows]
-            ),
+            "multiplicative-b": pa.array([10.0 * value for value in multiplicative_rows]),
         }
     )
     context = _context(
@@ -550,9 +548,7 @@ def test_competing_joint_patterns_partition_columns_before_final_refit() -> None
     fit = EvaluationWorkspace(
         context,
         pattern_catalog=PatternCatalog(implementations),
-    ).infer(
-        _candidate(tuple(range(6)), tuple(range(4)))
-    )
+    ).infer(_candidate(tuple(range(6)), tuple(range(4))))
 
     assert tuple(column.pattern for column in fit.columns) == (
         PatternKind.ADDITIVE,

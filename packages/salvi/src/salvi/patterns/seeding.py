@@ -257,9 +257,7 @@ class ConstantPatternSeedStrategy(_BasePatternSeedStrategy):
             finite = np.flatnonzero(np.isfinite(column_errors))
             if finite.size < shape.column_count:
                 continue
-            order = finite[
-                np.lexsort((candidate_columns[finite], column_errors[finite]))
-            ]
+            order = finite[np.lexsort((candidate_columns[finite], column_errors[finite]))]
             columns = tuple(
                 sorted(int(column) for column in candidate_columns[order[: shape.column_count]])
             )
@@ -306,11 +304,7 @@ def _joint_relation_ranking(
         relation = np.full(raw.shape[1], np.nan)
         relation[usable] = raw[second, usable] / denominator[usable]
         center = _finite_median(relation)
-        return (
-            np.full(raw.shape[1], math.inf)
-            if center is None
-            else np.abs(relation - center)
-        )
+        return np.full(raw.shape[1], math.inf) if center is None else np.abs(relation - center)
     raise ComponentError(f"{pattern.value} has no joint seed relation")
 
 
@@ -354,9 +348,7 @@ def _joint_row_scores(
         raise ComponentError(f"{pattern.value} has no joint seed relation")
     required = context.evaluation_support_policy.required_observations(matrix.shape[1])
     valid = (
-        np.isfinite(centers)
-        & np.isfinite(scores)
-        & (np.count_nonzero(usable, axis=1) >= required)
+        np.isfinite(centers) & np.isfinite(scores) & (np.count_nonzero(usable, axis=1) >= required)
     )
     row_scores[valid] = scores[valid]
     return row_scores
@@ -371,18 +363,12 @@ def _support_valid_row_selection(
 ) -> tuple[int, ...] | None:
     """Select high-affinity rows, repairing marginal column support by swaps."""
 
-    required_per_row = context.evaluation_support_policy.required_observations(
-        support.shape[1]
-    )
-    eligible = np.isfinite(scores) & (
-        np.count_nonzero(support, axis=1) >= required_per_row
-    )
+    required_per_row = context.evaluation_support_policy.required_observations(support.shape[1])
+    eligible = np.isfinite(scores) & (np.count_nonzero(support, axis=1) >= required_per_row)
     if np.count_nonzero(eligible) < row_count or not all(eligible[row] for row in mandatory_rows):
         return None
 
-    ranked = np.flatnonzero(eligible)[
-        np.lexsort((np.flatnonzero(eligible), scores[eligible]))
-    ]
+    ranked = np.flatnonzero(eligible)[np.lexsort((np.flatnonzero(eligible), scores[eligible]))]
     selected_mask = np.zeros(len(scores), dtype=np.bool_)
     selected_mask[ranked[:row_count]] = True
     selected_mask[np.asarray(mandatory_rows, dtype=np.int64)] = True
@@ -404,9 +390,7 @@ def _support_valid_row_selection(
     column_counts = np.count_nonzero(selected_support, axis=0).astype(np.int64)
     mandatory = frozenset(mandatory_rows)
     while np.any(column_counts < required_per_column):
-        current_deficit = int(
-            np.sum(np.maximum(required_per_column - column_counts, 0))
-        )
+        current_deficit = int(np.sum(np.maximum(required_per_column - column_counts, 0)))
         deficit_columns = column_counts < required_per_column
         outside = np.flatnonzero(eligible & ~selected_mask)
         if outside.size == 0:
@@ -416,9 +400,7 @@ def _support_valid_row_selection(
         additions = outside[useful]
         if additions.size == 0:
             return None
-        additions = additions[
-            np.lexsort((additions, scores[additions], -gains[useful]))
-        ]
+        additions = additions[np.lexsort((additions, scores[additions], -gains[useful]))]
 
         selected = np.flatnonzero(selected_mask)
         removable = np.asarray(
@@ -430,9 +412,7 @@ def _support_valid_row_selection(
         repaired = False
         for added in additions:
             counts_after_addition = column_counts + support[added].astype(np.int64)
-            projected = counts_after_addition[np.newaxis, :] - support[removable].astype(
-                np.int64
-            )
+            projected = counts_after_addition[np.newaxis, :] - support[removable].astype(np.int64)
             deficits = np.sum(
                 np.maximum(required_per_column - projected, 0),
                 axis=1,
@@ -441,9 +421,7 @@ def _support_valid_row_selection(
             if best_deficit >= current_deficit:
                 continue
             options = removable[deficits == best_deficit]
-            removed = int(
-                options[np.lexsort((-options, -scores[options]))][0]
-            )
+            removed = int(options[np.lexsort((-options, -scores[options]))][0])
             selected_mask[removed] = False
             selected_mask[int(added)] = True
             column_counts = counts_after_addition - support[removed].astype(np.int64)
@@ -493,13 +471,11 @@ class _JointPatternSeedStrategy(_BasePatternSeedStrategy):
                 required_per_row = context.evaluation_support_policy.required_observations(
                     column_count
                 )
-                support_valid_rows = (
-                    np.count_nonzero(selected_support, axis=1) >= required_per_row
-                )
+                support_valid_rows = np.count_nonzero(selected_support, axis=1) >= required_per_row
                 if np.count_nonzero(support_valid_rows) < row_count:
                     continue
-                required_per_column = (
-                    context.evaluation_support_policy.required_observations(row_count)
+                required_per_column = context.evaluation_support_policy.required_observations(
+                    row_count
                 )
                 if np.all(
                     np.count_nonzero(selected_support[support_valid_rows], axis=0)
@@ -574,9 +550,7 @@ class _JointPatternSeedStrategy(_BasePatternSeedStrategy):
             finite = np.flatnonzero(np.isfinite(ranking))
             if finite.size < shape.column_count:
                 continue
-            order = finite[
-                np.lexsort((candidate_columns[finite], ranking[finite]))
-            ]
+            order = finite[np.lexsort((candidate_columns[finite], ranking[finite]))]
             chosen = order[: shape.column_count]
             columns = tuple(sorted(int(column) for column in candidate_columns[chosen]))
             matrix = np.column_stack([dataset.numeric_column(column) for column in columns])
@@ -584,9 +558,7 @@ class _JointPatternSeedStrategy(_BasePatternSeedStrategy):
             row_scores = _joint_row_scores(context, self.pattern, matrix, first, scales)
             row_scores[first] = -2.0
             row_scores[second] = -1.0
-            selected_support = dataset.support_matrix()[
-                :, np.asarray(columns, dtype=np.int64)
-            ]
+            selected_support = dataset.support_matrix()[:, np.asarray(columns, dtype=np.int64)]
             rows = _support_valid_row_selection(
                 context,
                 row_scores,

@@ -135,9 +135,7 @@ def _neighborhoods(
             if largest_gap > NUMERIC_TOLERANCE:
                 cut = candidate_cut
         proposals.add(tuple(sorted(columns[index] for index in ordered[:cut])))
-        proposals.add(
-            tuple(sorted(columns[index] for index in ordered[:minimum_columns]))
-        )
+        proposals.add(tuple(sorted(columns[index] for index in ordered[:minimum_columns])))
     return tuple(sorted(proposals, key=lambda group: (len(group), group)))
 
 

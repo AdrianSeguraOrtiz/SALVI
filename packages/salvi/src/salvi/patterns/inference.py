@@ -125,9 +125,7 @@ class IterativeBestFitAssignment:
             eligible = tuple(
                 column
                 for column in columns
-                if implementation.definition.supports(
-                    context.dataset.column_metadata(column).kind
-                )
+                if implementation.definition.supports(context.dataset.column_metadata(column).kind)
             )
             assert implementation.column_fitter is not None
             fits = self._fit_columns(
@@ -345,9 +343,7 @@ class IterativeBestFitAssignment:
             column
             for column in bicluster.column_indices
             if any(
-                implementation.definition.supports(
-                    context.dataset.column_metadata(column).kind
-                )
+                implementation.definition.supports(context.dataset.column_metadata(column).kind)
                 for implementation in group_implementations
             )
         )
@@ -387,9 +383,7 @@ class IterativeBestFitAssignment:
         if isinstance(fitter, BatchColumnPatternFitter):
             fits = tuple(fitter.fit_columns(context, bicluster, columns))
         else:
-            fits = tuple(
-                fitter.fit_column(context, bicluster, column) for column in columns
-            )
+            fits = tuple(fitter.fit_column(context, bicluster, column) for column in columns)
         if len(fits) != len(columns):
             raise RuntimeError("batch column fitter returned an unexpected number of fits")
         return fits
@@ -432,10 +426,7 @@ class IterativeBestFitAssignment:
                     and references.get(column) is not None
                     and references[column].valid
                 )
-                if (
-                    implementation.group_candidate_generator is None
-                    or not has_local_fallback
-                ):
+                if implementation.group_candidate_generator is None or not has_local_fallback:
                     proposal, proposal_issues = cls._stable_group_proposal(
                         context,
                         bicluster,
@@ -513,17 +504,14 @@ class IterativeBestFitAssignment:
         """Partition overlapping one-group models before their final refit."""
 
         implementations_by_pattern = {
-            implementation.definition.kind: implementation
-            for implementation in implementations
+            implementation.definition.kind: implementation for implementation in implementations
         }
         proposal_fits: dict[PatternKind, dict[int, PatternCandidateFit]] = {}
         for implementation in implementations:
             eligible = tuple(
                 column
                 for column in bicluster.column_indices
-                if implementation.definition.supports(
-                    context.dataset.column_metadata(column).kind
-                )
+                if implementation.definition.supports(context.dataset.column_metadata(column).kind)
                 and references.get(column) is not None
                 and references[column].valid
             )
@@ -591,9 +579,7 @@ class IterativeBestFitAssignment:
             if pattern not in active:
                 continue
             assigned = tuple(
-                column
-                for column in bicluster.column_indices
-                if choices.get(column) is pattern
+                column for column in bicluster.column_indices if choices.get(column) is pattern
             )
             proposal, proposal_issues = cls._stable_group_proposal(
                 context,

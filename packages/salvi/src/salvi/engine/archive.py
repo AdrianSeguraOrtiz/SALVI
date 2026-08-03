@@ -194,9 +194,7 @@ class DeepGridMomeArchive:
             coordinate = tuple(index for index, _value, _bounds in values)
             by_descriptor = {
                 descriptor: (value, bounds)
-                for descriptor, (_index, value, bounds) in zip(
-                    descriptors, values, strict=True
-                )
+                for descriptor, (_index, value, bounds) in zip(descriptors, values, strict=True)
             }
             row_count, row_bounds = by_descriptor["row_cardinality"]
             column_count, column_bounds = by_descriptor["column_cardinality"]

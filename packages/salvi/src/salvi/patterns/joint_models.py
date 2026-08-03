@@ -19,9 +19,7 @@ def additive_row_effects(
 ) -> npt.NDArray[np.float64]:
     usable = np.isfinite(matrix)
     original = np.count_nonzero(source & usable, axis=1)
-    required = context.evaluation_support_policy.required_observations(
-        matrix.shape[1]
-    )
+    required = context.evaluation_support_policy.required_observations(matrix.shape[1])
     sufficient = original >= required
     residuals = np.where(usable, matrix - beta[np.newaxis, :], np.nan)
     alpha = nanmedian_2d(residuals, axis=1)

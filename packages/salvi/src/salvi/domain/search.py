@@ -112,12 +112,8 @@ class ArchiveCellTarget(FrozenModel):
     @property
     def column_range(self) -> tuple[int, int]:
         return (
-            self.column_count
-            if self.minimum_column_count is None
-            else self.minimum_column_count,
-            self.column_count
-            if self.maximum_column_count is None
-            else self.maximum_column_count,
+            self.column_count if self.minimum_column_count is None else self.minimum_column_count,
+            self.column_count if self.maximum_column_count is None else self.maximum_column_count,
         )
 
 

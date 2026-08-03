@@ -82,9 +82,7 @@ class MultiplicativePatternFitter:
         matrix = raw_matrix / scales[np.newaxis, :]
         source = dataset.support_matrix()[np.ix_(rows, column_array)]
         source_support = np.count_nonzero(source, axis=0)
-        required_row_support = context.evaluation_support_policy.required_observations(
-            len(rows)
-        )
+        required_row_support = context.evaluation_support_policy.required_observations(len(rows))
         insufficient = np.flatnonzero(source_support < required_row_support)
         if insufficient.size:
             return rejected_group(
@@ -145,10 +143,7 @@ class MultiplicativePatternFitter:
         residual_matrix = np.where(
             usable_matrix,
             normalized_absolute_residuals(
-                raw_matrix
-                - scales[np.newaxis, :]
-                * alpha[:, np.newaxis]
-                * beta[np.newaxis, :],
+                raw_matrix - scales[np.newaxis, :] * alpha[:, np.newaxis] * beta[np.newaxis, :],
                 scales,
             ),
             np.nan,

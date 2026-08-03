@@ -537,9 +537,7 @@ def _structures(reference: RepertoireReference) -> tuple[_Structure, ...]:
             contents.columns[index].name for index in record.bicluster.column_indices
         )
         patterns = {
-            contents.columns[index].name: (
-                "UNASSIGNED" if pattern is None else pattern.value
-            )
+            contents.columns[index].name: ("UNASSIGNED" if pattern is None else pattern.value)
             for index, pattern in record.column_patterns
         }
         structures.append(
