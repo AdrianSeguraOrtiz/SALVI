@@ -10,6 +10,13 @@ artifact schemas.
   generation, execution, monitoring and final repertoire extraction.
 - Added constant, additive and multiplicative pattern inference for heterogeneous
   data, including mixed assignment and per-column scientific explanations.
+- Kept additive and multiplicative model identities distinct by fitting strict
+  raw additive shifts and normalizing only residuals; mixed inference now uses
+  bounded pattern-specific neighborhoods and reports observational ambiguity.
+- Made pattern-aware QD initialization and restarts respect exact cell ranges,
+  observed-support feasibility and pattern-specific reachability.
+- Added lightweight structural BiclusterSet reads and vectorized clinical
+  repertoire matching to avoid rebuilding full evaluations during stability analysis.
 - Added deterministic serial and bounded parallel execution with checkpoints and
   resumability.
 - Separated reusable pipeline YAML from dataset/run bindings, added compact

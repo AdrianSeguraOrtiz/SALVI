@@ -58,10 +58,18 @@ Constant patterns apply to every supported column kind:
 - Boolean and categorical columns use the local mode and original label.
 
 Additive patterns apply only to numeric columns. A bicluster contains at most one
-joint additive subgroup. Its standardized values follow one row effect plus one
-column effect. Alternating medians estimate those effects, recenter row effects to
+joint additive subgroup. The model is fitted on original values:
+
+```text
+x_ij = alpha_i + beta_j + residual_ij
+```
+
+Alternating medians estimate the row and column effects, recenter row effects to
 median zero, ignore missing observations, and stop on convergence or iteration
-limit.
+limit. The global robust range of each column normalizes its residual only after
+model fitting. Columns are not independently centered or scaled before fitting:
+doing so would turn every positive affine or proportional relation into an
+apparently perfect additive pattern.
 
 Multiplicative patterns also apply only to numeric columns and currently form at
 most one joint subgroup. They model proportional evolution without taking
@@ -83,9 +91,10 @@ one and choosing a deterministic sign. This supports zero and negative data and
 avoids a log transform that would change the accepted data domain.
 
 Pattern implementations are registered in an explicit catalog. Each entry couples
-its fitter and contrast strategy with a definition declaring supported column
-kinds, whether it fits one `COLUMN` independently or a joint `SUBSET`, its minimum
-column count, its maximum number of groups, and whether it is the reference model.
+its fitter and contrast strategy, and may provide a bounded group-candidate
+generator based on the pattern's own invariants. Its definition declares supported
+column kinds, whether it fits one `COLUMN` independently or a joint `SUBSET`, its
+minimum column count, its maximum number of groups, and whether it is the reference model.
 Exactly one reference model is required. This metadata lets inference and contrast
 dispatch decide which implementations may compete without assuming that every
 future pattern is simply "not constant". Adding another joint pattern requires a
@@ -100,13 +109,21 @@ inspects ground truth.
 
 In the current mixed mode, nominal and Boolean columns are constant. Numeric
 columns begin as candidates for every compatible implementation. Column-scoped
-fits establish independent references. Subset-scoped fitters propose joint groups,
-remove one insufficiently improved column at a time, and refit until stable.
-Overlapping stable proposals are ranked deterministically by their mean improvement
-over the best local or registered reference model. Stable winning and losing
-alternatives are retained for explanation. Additive and multiplicative subgroups
-need at least two informative columns and each row effect needs at least two
-observed members. Remaining numeric columns use the constant model when it is
+fits establish independent references. Each built-in joint model proposes a
+bounded set of column neighborhoods from its invariant profile: raw centered
+profiles for additive shifts and robust-scaled proportional profiles for
+multiplicative effects. The assignment engine fits those proposals, enforces each
+model's minimum cardinality, partitions overlaps by normalized improvement, and
+refits the selected disjoint groups. A future joint pattern supplies its own
+candidate generator through the same catalog contract; inference contains no
+pattern-specific branch.
+
+Winning and losing alternatives are retained for explanation. If two models are
+observationally equivalent within numerical tolerance, one deterministic
+assignment is used operationally and the column diagnostics explicitly report the
+ambiguity, equivalent families, and error margin. Additive and multiplicative
+subgroups need at least two informative columns and each row effect needs at least
+two observed members. Remaining numeric columns use the constant model when it is
 allowed. The current additive and multiplicative definitions each permit at most
 one group per bicluster; this is catalog metadata rather than an inference-engine
 assumption.
@@ -131,9 +148,10 @@ Each selected column contributes the error of its inferred pattern. Constant
 numeric columns use absolute deviations from the local median divided by the global
 `P95 - P05` range and clipped to one. Constant categorical and Boolean columns use
 mode disagreement normalized by the number of distinct values observed globally,
-with deterministic semantic-order tie handling. Additive columns use standardized
-residuals from their shared row and column effects. Multiplicative columns use
-residuals from their robust-scaled rank-one model. Both are clipped to one.
+with deterministic semantic-order tie handling. Additive columns use raw-model
+residuals divided by their global robust range. Multiplicative columns use
+residuals from their robust-scaled rank-one model. Both therefore share the same
+dimensionless scale and are clipped to one.
 
 The objective aggregates column errors with a root-mean-square operation. This
 makes one badly fitted column matter without allowing the number of selected

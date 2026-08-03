@@ -260,11 +260,13 @@ events and therefore cannot influence either policy.
 
 Pattern implementations are registered in a deterministic catalog. Each one
 couples its fitter and contrast strategy with compatible column kinds and a
-column-local or joint-subset scope. Exactly one column-scoped implementation is
-declared as the scientific reference model; inference does not hard-code its
-identity. The current generic assignment strategy compares local alternatives,
-iteratively prunes joint proposals, resolves overlaps deterministically, retains
-all stable competing alternatives, and stores explicit group membership.
+column-local or joint-subset scope. Joint implementations may additionally
+register a bounded candidate-group generator based on their own invariant profile.
+Exactly one column-scoped implementation is declared as the scientific reference
+model; inference does not hard-code its identity. The current generic assignment
+strategy compares normalized local alternatives, discovers candidate
+neighborhoods, resolves overlaps deterministically, retains competing alternatives,
+records observational ambiguity, and stores explicit group membership.
 Inference and contrast can therefore support future pattern families without a
 constant-versus-additive decision tree in either objective.
 
