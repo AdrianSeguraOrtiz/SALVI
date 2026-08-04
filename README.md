@@ -1,5 +1,7 @@
 # SALVI
 
+![SALVI quality-diversity biclustering workflow](docs/images/salvi-architecture.svg)
+
 SALVI is a component-oriented framework for biclustering heterogeneous data with
 quality-diversity optimization. It searches for coherent and contrasting
 submatrices while using row and column cardinality as behavioral descriptors,
