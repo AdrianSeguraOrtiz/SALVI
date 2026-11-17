@@ -9,6 +9,7 @@ import multiprocessing as mp
 import re
 import sys
 from collections import defaultdict
+from collections.abc import Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,6 +18,7 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 import yaml
 from scipy.stats import rankdata, wilcoxon
 
@@ -1305,6 +1307,35 @@ def run_salvi_ablation(
             len(completed),
         )
 
+    return _write_ablation_summary(
+        configuration,
+        datasets=datasets,
+        loaded_pipelines=loaded_pipelines,
+        case_records=case_records,
+        selection_records=selection_records,
+        run_records=run_records,
+        emitter_records=emitter_records,
+        repertoire_records=repertoire_records,
+        workers=workers,
+    )
+
+
+def _write_ablation_summary(
+    configuration: SalviAblationConfiguration,
+    *,
+    datasets: tuple[_DatasetCase, ...],
+    loaded_pipelines: dict[str, PipelineConfiguration],
+    case_records: list[dict[str, Any]],
+    selection_records: list[dict[str, Any]],
+    run_records: list[dict[str, object]],
+    emitter_records: list[dict[str, object]],
+    repertoire_records: list[dict[str, object]],
+    workers: int,
+) -> Path:
+    root = configuration.output_directory
+    root.mkdir(parents=True, exist_ok=True)
+    completed = [record for record in case_records if record["status"] == "completed"]
+    identities = sorted({str(record["salvi_implementation_sha256"]) for record in case_records})
     coverage_metrics = tuple(
         _coverage_name(threshold) for threshold in configuration.metrics.coverage_thresholds
     )
@@ -1453,9 +1484,9 @@ def run_salvi_ablation(
         "pipeline_count": len(configuration.pipelines),
         "selector_count": len(configuration.selectors),
         "run_seed_count": len(configuration.run_seeds),
-        "case_count": len(cases),
+        "case_count": len(case_records),
         "completed_count": len(completed),
-        "failed_count": len(cases) - len(completed),
+        "failed_count": len(case_records) - len(completed),
         "selection_count": len(selection_records),
         "completed_selection_count": sum(
             record["status"] == "completed" for record in selection_records
@@ -1474,7 +1505,8 @@ def run_salvi_ablation(
         "paired_analysis_unit": configuration.metrics.paired_analysis_unit,
         "paired_seed_aggregation": configuration.metrics.paired_seed_aggregation,
         "incomplete_paired_dataset_count": len(incomplete_paired),
-        "salvi_implementation_sha256": implementation_sha256,
+        "salvi_implementation_sha256": identities[0] if len(identities) == 1 else None,
+        "salvi_implementation_sha256s": identities,
         "effective_workers": workers,
         "summary": {
             "run": run_summary,
@@ -1487,4 +1519,158 @@ def run_salvi_ablation(
     return root.resolve()
 
 
-__all__ = ["run_salvi_ablation"]
+def merge_salvi_ablation(
+    configuration: SalviAblationConfiguration,
+    sources: Mapping[str, Path],
+    *,
+    validate_only: bool = False,
+) -> Path:
+    """Rebuild a complete analysis from explicit, immutable per-pipeline studies.
+
+    This does not assert code equivalence or relabel historical fingerprints.
+    Callers choose historical baselines explicitly; datasets, configurations,
+    metric definitions, selectors, seeds and saved table checksums must match.
+    No searches or selectors are executed and source studies are never written.
+    """
+    pipelines = {
+        entry.identifier: load_pipeline_configuration(entry.pipeline_configuration).pipeline
+        for entry in configuration.pipelines
+    }
+    if set(sources) != set(pipelines):
+        raise ExperimentArtifactError("one source study is required for every pipeline")
+    root = configuration.output_directory.resolve()
+    if any(root == path.resolve() for path in sources.values()):
+        raise ExperimentArtifactError("merged analysis must not overwrite a source study")
+    datasets = _discover_datasets(configuration)
+    dataset_index = {dataset.identifier: dataset for dataset in datasets}
+    names = (
+        "case-status",
+        "selection-status",
+        "run-metrics",
+        "emitter-metrics",
+        "repertoire-metrics",
+    )
+    tables: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
+    for identifier, source in sources.items():
+        manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+        for relative, expected in manifest["checksums"].items():
+            if sha256_file(source / relative) != expected:
+                raise ExperimentArtifactError(f"source checksum mismatch: {source / relative}")
+        original = SalviAblationConfiguration.model_validate(
+            yaml.safe_load((source / "effective-experiment-configuration.yaml").read_text())
+        )
+        if (
+            original.metrics != configuration.metrics
+            or original.selectors != configuration.selectors
+            or original.pattern_binding != configuration.pattern_binding
+            or original.run_seeds != configuration.run_seeds
+            or original.task != configuration.task
+        ):
+            raise ExperimentArtifactError(f"incompatible analysis protocol: {source}")
+        snapshot = load_pipeline_configuration(
+            source / "pipeline-sources" / f"{_segment(identifier)}.yaml"
+        ).pipeline
+        if snapshot != pipelines[identifier]:
+            raise ExperimentArtifactError(f"pipeline configuration mismatch: {identifier}")
+        for name in names:
+            path = source / f"{name}.parquet"
+            if name == "selection-status" and not configuration.selectors:
+                continue
+            if name == "emitter-metrics" and not path.exists():
+                continue
+            for record in pq.read_table(path).to_pylist():
+                pipeline_id = str(record.get("search_pipeline_id") or record["pipeline_id"])
+                if pipeline_id.split("::", 1)[0] != identifier:
+                    continue
+                if name == "case-status":
+                    dataset = dataset_index.get(str(record["dataset_identifier"]))
+                    if (
+                        dataset is None
+                        or record["status"] != "completed"
+                        or record["dataset_search_sha256"] != dataset.search_fingerprint
+                        or record["ground_truth_sha256"] != dataset.ground_truth_fingerprint
+                    ):
+                        raise ExperimentArtifactError(f"invalid historical case: {identifier}")
+                tables[name].append(record)
+    expected_keys = {
+        (identifier, dataset.identifier, seed)
+        for identifier in pipelines
+        for dataset in datasets
+        for seed in configuration.run_seeds
+    }
+    for name in ("case-status", "run-metrics"):
+        keys = [
+            (str(r["pipeline_id"]), str(r["dataset_identifier"]), int(r["run_seed"]))
+            for r in tables[name]
+        ]
+        if len(keys) != len(expected_keys) or set(keys) != expected_keys:
+            raise ExperimentArtifactError(f"incomplete or duplicate {name} records")
+    if configuration.selectors:
+        expected_selections = {
+            (*key, selector.identifier)
+            for key in expected_keys
+            for selector in configuration.selectors
+        }
+        selected = [
+            (
+                str(r["pipeline_id"]),
+                str(r["dataset_identifier"]),
+                int(r["run_seed"]),
+                str(r["selector_id"]),
+            )
+            for r in tables["selection-status"]
+            if r["status"] == "completed"
+        ]
+        if len(selected) != len(expected_selections) or set(selected) != expected_selections:
+            raise ExperimentArtifactError("incomplete or duplicate selections")
+    expected_repertoires: set[tuple[str, str, int, str, str | None]] = set()
+    for key in expected_keys:
+        for artifact in configuration.metrics.artifacts:
+            selectors = (
+                tuple(selector.identifier for selector in configuration.selectors)
+                if artifact == "FINAL" and configuration.selectors
+                else (None,)
+            )
+            expected_repertoires.update((*key, artifact, selector) for selector in selectors)
+    repertoire_keys = [
+        (
+            str(r["search_pipeline_id"]),
+            str(r["dataset_identifier"]),
+            int(r["run_seed"]),
+            str(r["artifact"]),
+            r["selector_id"],
+        )
+        for r in tables["repertoire-metrics"]
+    ]
+    if (
+        len(repertoire_keys) != len(expected_repertoires)
+        or set(repertoire_keys) != expected_repertoires
+    ):
+        raise ExperimentArtifactError("incomplete or duplicate repertoire metrics")
+    for record in tables["repertoire-metrics"]:
+        BiclusterSetReader().read_manifest(Path(str(record["bicluster_set"])))
+    if validate_only:
+        return root
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "effective-experiment-configuration.yaml").write_text(
+        yaml.safe_dump(configuration.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
+    )
+    for identifier, pipeline in pipelines.items():
+        _write_pipeline(root / "pipeline-sources" / f"{_segment(identifier)}.yaml", pipeline)
+    write_json(
+        root / "source-studies.json", {key: str(value.resolve()) for key, value in sources.items()}
+    )
+    return _write_ablation_summary(
+        configuration,
+        datasets=datasets,
+        loaded_pipelines=pipelines,
+        case_records=tables["case-status"],
+        selection_records=tables["selection-status"],
+        run_records=tables["run-metrics"],
+        emitter_records=tables["emitter-metrics"],
+        repertoire_records=tables["repertoire-metrics"],
+        workers=configuration.execution.workers,
+    )
+
+
+__all__ = ["merge_salvi_ablation", "run_salvi_ablation"]

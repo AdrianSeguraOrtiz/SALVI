@@ -13,7 +13,10 @@ from salvi.domain import (
 )
 from salvi.infrastructure.events import SQLiteEventStore
 from salvi_experiments.benchmark import run_salvi_ablation
-from salvi_experiments.benchmark.ablation import _aggregate_paired_deltas_by_dataset
+from salvi_experiments.benchmark.ablation import (
+    _aggregate_paired_deltas_by_dataset,
+    merge_salvi_ablation,
+)
 from salvi_experiments.cli import main
 from salvi_experiments.configuration import (
     AblationDatasetSelection,
@@ -62,6 +65,66 @@ def _configuration(
         ),
         output_directory=tmp_path / "ablation",
     )
+
+
+def test_merge_ablation_preserves_historical_provenance_without_running_search(
+    tmp_path: Path,
+    experiment_dataset: Path,
+    scientific_pipeline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import salvi_experiments.benchmark.ablation as module
+
+    configuration = _configuration(tmp_path, experiment_dataset, scientific_pipeline).model_copy(
+        update={"selectors": (AblationSelector(identifier="raw"),)}
+    )
+    monkeypatch.setattr(module, "_salvi_implementation_fingerprint", lambda: "historical-source")
+    historical = run_salvi_ablation(configuration)
+    original_report = (historical / "report.json").read_bytes()
+    revised_configuration = configuration.model_copy(
+        update={
+            "pipelines": (configuration.pipelines[1],),
+            "output_directory": tmp_path / "revised",
+        }
+    )
+    monkeypatch.setattr(module, "_salvi_implementation_fingerprint", lambda: "corrected-source")
+    revised = run_salvi_ablation(revised_configuration)
+
+    def unexpected_execution(*args: object, **kwargs: object) -> None:
+        pytest.fail("merging must not execute searches or selectors")
+
+    monkeypatch.setattr(module, "_execute_case", unexpected_execution)
+    monkeypatch.setattr(module, "_apply_selector", unexpected_execution)
+    merged_configuration = configuration.model_copy(
+        update={"output_directory": tmp_path / "merged"}
+    )
+    sources = {"baseline": historical, "variant": revised}
+    merge_salvi_ablation(merged_configuration, sources, validate_only=True)
+    assert not merged_configuration.output_directory.exists()
+    result = merge_salvi_ablation(merged_configuration, sources)
+    report = json.loads((result / "report.json").read_text())
+    assert report["completed_count"] == 2
+    assert report["completed_selection_count"] == 2
+    assert report["salvi_implementation_sha256"] is None
+    assert report["salvi_implementation_sha256s"] == ["corrected-source", "historical-source"]
+    assert (historical / "report.json").read_bytes() == original_report
+    records = pq.read_table(result / "case-status.parquet").to_pylist()
+    assert {r["pipeline_id"]: r["salvi_implementation_sha256"] for r in records} == {
+        "baseline": "historical-source",
+        "variant": "corrected-source",
+    }
+    with pytest.raises(ExperimentArtifactError, match="overwrite"):
+        merge_salvi_ablation(configuration, sources)
+    incompatible = merged_configuration.model_copy(
+        update={
+            "metrics": configuration.metrics.model_copy(update={"structural_row_weight": 0.25}),
+        }
+    )
+    with pytest.raises(ExperimentArtifactError, match="incompatible analysis protocol"):
+        merge_salvi_ablation(incompatible, sources)
+    (historical / "run-metrics.parquet").write_bytes(b"corrupt")
+    with pytest.raises(ExperimentArtifactError, match="checksum mismatch"):
+        merge_salvi_ablation(merged_configuration, sources)
 
 
 def test_ablation_configuration_accepts_single_pipeline_validation(
