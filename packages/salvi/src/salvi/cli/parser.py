@@ -147,6 +147,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     config = subparsers.add_parser("config", help="configuration document utilities")
     config_subparsers = config.add_subparsers(dest="config_command", required=True)
+    default_parser = config_subparsers.add_parser(
+        "default",
+        help="write the validated reference pipeline used by the web interface",
+    )
+    default_parser.add_argument("--output", type=Path)
+    default_parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="omit schema-level defaults and empty optional collections",
+    )
     format_parser = config_subparsers.add_parser(
         "format",
         help="validate and normalize one reusable pipeline YAML",

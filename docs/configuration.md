@@ -35,7 +35,18 @@ validation instead of silently changing their formulas. Runtime parallelism is
 selected through the evaluation executor; no single-option kernel selector is
 exposed.
 
-## Pipeline schema
+## Reference pipeline
+
+The Python API, CLI, and web builder obtain their initial composition from the
+same validated reference pipeline. It is the configuration selected by the
+validation study and can be generated without copying an example file:
+
+```bash
+salvi config default --output pipeline.yaml
+```
+
+The following excerpt keeps its scientific and search parameters explicit. A
+compact equivalent can be generated with `salvi config default --compact`.
 
 ```yaml
 schema_version: 1
@@ -66,7 +77,7 @@ evaluation:
     name: minimum_observed_support
     parameters:
       min_observed_count: 2
-      min_observed_ratio: 0.8
+      min_observed_ratio: 0.5
 
 search:
   engine:
@@ -93,38 +104,66 @@ search:
           binning: GEOMETRIC
           bins: 8
         - descriptor: column_cardinality
-          binning: LINEAR
-          bins: 6
+          binning: GEOMETRIC
+          bins: 8
       cell_capacity: 8
   parent_selection:
-    name: repertoire_uniform
+    name: cell_uniform_quality
     parameters: {}
+  mate_selection:
+    name: cell_first_evidence_compatible
+    parameters:
+      parent_pool_size: 32
+      mate_pool_size: 4
+      minimum_row_jaccard: 0.1
+      minimum_column_jaccard: 0.1
+      cell_neighborhood_radius: 1
+  crossover:
+    name: evidence_weighted_recombination
+    parameters:
+      application_probability: 1.0
+      row_exchange_probability: 0.5
+      column_exchange_probability: 0.5
   initialization:
-    name: uniform_random
-    parameters: {}
+    name: cell_coverage_pattern_aware
+    parameters:
+      seeds_per_cell: 4
+      max_attempts_per_cell: 12
+      joint_column_candidate_pool_size: 32
   emitters:
-    - name: random_move
-      parameters: {}
+    - {name: add_row, parameters: {guided: true, parent_pool_size: 16, candidate_pool_size: 64}}
+    - {name: remove_row, parameters: {guided: true, parent_pool_size: 16, candidate_pool_size: 64}}
+    - {name: swap_row, parameters: {guided: true, parent_pool_size: 16, candidate_pool_size: 64}}
+    - {name: add_column, parameters: {guided: true, parent_pool_size: 16, candidate_pool_size: 64}}
+    - {name: remove_column, parameters: {guided: true, parent_pool_size: 16, candidate_pool_size: 64}}
+    - {name: swap_column, parameters: {guided: true, parent_pool_size: 16, candidate_pool_size: 64}}
+    - {name: shape_move, parameters: {guided: true, parent_pool_size: 16, candidate_pool_size: 64}}
+    - {name: crossover, parameters: {max_attempts: 8}}
+    - {name: cell_coverage_restart, parameters: {joint_column_candidate_pool_size: 32}}
   scheduler:
-    name: first
-    parameters: {}
+    name: cell_balanced_adaptive_credit
+    parameters:
+      exploration_weight: 0.5
+      new_cell_reward: 1.0
+      insertion_reward: 0.25
+      underexplored_cell_weight: 1.0
   termination:
     name: evaluation_budget
     parameters:
-      max_evaluations: 10000
+      max_evaluations: 50000
 
 execution:
   executor:
     name: process_pool
     parameters:
       integration_mode: DETERMINISTIC
-      max_in_flight: 16
+      max_in_flight: 8
   workers: 4
   cancellation_grace_seconds: 5.0
 
 monitoring:
   queue_capacity: 1024
-  checkpoint_interval_evaluations: 1000
+  checkpoint_interval_evaluations: 5000
   observers:
     - name: search_progress
       parameters: {}
@@ -316,7 +355,7 @@ Available candidate-validity policies:
 
 - `minimum_cardinality`: requires at least `min_rows` rows and `min_columns`
   prepared columns and rejects indices outside the prepared dataset. Defaults are
-  two rows and two columns.
+  ten rows and ten columns.
 
 Available observed-support policies:
 
@@ -324,7 +363,7 @@ Available observed-support policies:
   `ceil(min_observed_ratio * opportunity_count)` usable source observations,
   where the opportunity count is the relevant rows or columns for that
   calculation. The larger requirement wins. Defaults are two observations and
-  ratio `0.8`.
+  ratio `0.5`.
 
 The support policy deliberately counts original observations, not values made
 available by imputation. Pattern fitters and objectives consume this one shared

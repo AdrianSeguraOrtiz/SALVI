@@ -12,10 +12,12 @@ import time
 from pathlib import Path
 
 from salvi.application.configuration import (
+    PipelineConfiguration,
     RunBinding,
     load_pipeline_configuration,
     serialize_pipeline_configuration,
 )
+from salvi.application.defaults import default_scientific_configuration
 from salvi.application.inspection import inspect_pipeline
 from salvi.application.profiling import profile_configuration
 from salvi.application.run_service import CancellationToken, RunService
@@ -177,6 +179,14 @@ def dispatch(namespace: argparse.Namespace) -> int:
             loaded_pipeline.pipeline,
             compact=not namespace.expanded,
         )
+        if namespace.output is None:
+            print(content, end="")
+        else:
+            atomic_write_text(namespace.output.expanduser().resolve(), content)
+        return 0
+    if namespace.command == "config" and namespace.config_command == "default":
+        pipeline = PipelineConfiguration.model_validate(default_scientific_configuration())
+        content = serialize_pipeline_configuration(pipeline, compact=namespace.compact)
         if namespace.output is None:
             print(content, end="")
         else:

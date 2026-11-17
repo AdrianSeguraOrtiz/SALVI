@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 
 from salvi.application.configuration import (
+    PipelineConfiguration,
     RunBinding,
     load_bound_configuration,
     load_pipeline_configuration,
 )
+from salvi.application.defaults import default_scientific_configuration
 from salvi.application.factory import build_specification
 from salvi.application.inspection import inspect_pipeline
 from salvi.application.run_service import CancellationToken, RunService
@@ -491,6 +493,12 @@ def test_cli_lists_components_and_formats_compact_pipeline_yaml(
         == load_pipeline_configuration(pipeline).pipeline
     )
     assert "source_column_filters:" not in formatted.read_text(encoding="utf-8")
+
+    generated_default = tmp_path / "default.yaml"
+    assert main(["config", "default", "--output", str(generated_default)]) == 0
+    assert load_pipeline_configuration(generated_default).pipeline == (
+        PipelineConfiguration.model_validate(default_scientific_configuration())
+    )
 
 
 def test_cli_renders_human_and_markdown_component_catalogs(

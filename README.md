@@ -78,7 +78,7 @@ specification = (
     )
     .with_missing_values_policy(PreserveMissingValues())
     .add_numeric_transformation(RobustNumericScaling())
-    .with_candidate_validity_policy(MinimumCardinality(min_rows=2, min_columns=2))
+    .with_candidate_validity_policy(MinimumCardinality())
     .with_evaluation_support_policy(MinimumObservedSupport())
     .with_search_engine(SerialMomeSearchEngine())
     .add_objective(InternalCoherence())
@@ -123,7 +123,7 @@ preprocessing:
 evaluation:
   candidate_validity:
     name: minimum_cardinality
-    parameters: {min_rows: 2, min_columns: 2}
+    parameters: {min_rows: 10, min_columns: 10}
   observed_support: {name: minimum_observed_support}
 search:
   engine: {name: serial_mome}
@@ -152,6 +152,7 @@ monitoring:
 Validate, inspect, and execute it against a canonical `DatasetBundle`:
 
 ```bash
+salvi config default --output pipeline.yaml
 salvi validate pipeline.yaml --dataset dataset-bundle
 salvi inspect pipeline.yaml --dataset dataset-bundle
 salvi run pipeline.yaml \
@@ -165,6 +166,7 @@ The main CLI also provides:
 
 ```text
 salvi components [--kind KIND] [--format text|json|markdown]
+salvi config default [--output PIPELINE.yaml] [--compact]
 salvi config format PIPELINE.yaml [--output NORMALIZED.yaml]
 salvi select PIPELINE.yaml --dataset DATASET --repertoire INPUT --output OUTPUT
 salvi profile PIPELINE.yaml REPORT --dataset DATASET --output RUN_OUTPUT

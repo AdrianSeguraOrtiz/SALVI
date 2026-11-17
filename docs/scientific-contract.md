@@ -39,9 +39,9 @@ preprocessing stage; scientific objectives declare the resulting
 `robust-numeric-data` capability.
 
 Candidate structure and observed support are independent policies. The default
-candidate-validity component requires at least two rows and two columns. The
+candidate-validity component requires at least ten rows and ten columns. The
 default support component requires at least two original observations and an
-original-observation ratio of `0.8`. This prevents a one-value column from
+original-observation ratio of `0.5`. This prevents a one-value column from
 receiving perfect constant coherence. Fitters may impose stronger
 pattern-specific mathematical requirements, such as two observations for an
 additive row effect, but may not weaken the configured global policy.
