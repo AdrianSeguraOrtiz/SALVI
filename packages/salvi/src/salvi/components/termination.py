@@ -11,12 +11,12 @@ from salvi.domain.search import TerminationProgress
 
 
 class TerminationConfiguration(EmptyConfiguration):
-    max_evaluations: int = Field(default=1, ge=1)
+    max_evaluations: int = Field(default=50_000, ge=1)
 
 
 @dataclass(frozen=True, slots=True)
 class EvaluationBudget:
-    max_evaluations: int = 1
+    max_evaluations: int = 50_000
     component_name: str = "evaluation_budget"
     provides: frozenset[str] = frozenset({"termination"})
     requires: frozenset[str] = frozenset()

@@ -25,6 +25,10 @@ class MembershipRecombinationConfiguration(BaseModel):
     column_exchange_probability: Annotated[float, Field(ge=0.0, le=1.0)] = 0.5
 
 
+class EvidenceWeightedRecombinationConfiguration(MembershipRecombinationConfiguration):
+    application_probability: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
+
+
 class BitFlipMutationConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -126,24 +130,42 @@ def _repair_joint_group_support(
     available = set(first.candidate.bicluster.column_indices) | set(
         second.candidate.bicluster.column_indices
     )
-    for group in (*_joint_groups(first), *_joint_groups(second)):
-        if len(selected & set(group)) != 1:
-            continue
-        siblings = tuple(
-            sorted(
-                (column for column in group if column in available and column not in selected),
+    groups = tuple(
+        dict.fromkeys(frozenset(group) for group in (*_joint_groups(first), *_joint_groups(second)))
+    )
+    # A repair must remove a singleton without creating another, including in
+    # overlapping groups inherited from the other parent. This also bounds retries.
+    changed = True
+    while changed:
+        changed = False
+        for group in groups:
+            if len(selected & group) != 1:
+                continue
+            siblings = sorted(
+                (group & available) - selected,
                 key=lambda column: (losses.get(column, 1.0), column),
             )
-        )
-        removable = tuple(
-            sorted(
-                (column for column in selected if column not in shared),
+            removable = sorted(
+                selected - shared - group,
                 key=lambda column: (-losses.get(column, 1.0), column),
             )
-        )
-        if siblings and removable:
-            selected.remove(removable[0])
-            selected.add(siblings[0])
+            protected = tuple(other for other in groups if len(selected & other) != 1)
+            replacement = next(
+                (
+                    (added, removed)
+                    for added in siblings
+                    for removed in removable
+                    if all(
+                        len(((selected - {removed}) | {added}) & other) != 1 for other in protected
+                    )
+                ),
+                None,
+            )
+            if replacement is not None:
+                added, removed = replacement
+                selected.remove(removed)
+                selected.add(added)
+                changed = True
     return tuple(sorted(selected))
 
 
@@ -237,6 +259,7 @@ class MembershipRecombinationCrossover:
 class EvidenceWeightedRecombinationCrossover(MembershipRecombinationCrossover):
     """Favor columns with strong persisted objective evidence in both parents."""
 
+    application_probability: float = 1.0
     component_name: str = "evidence_weighted_recombination"
     requires: frozenset[str] = frozenset({"candidate-validity", "prepared-dataset", "objective"})
 
@@ -426,6 +449,7 @@ class HalfUniformMembershipCrossover:
 __all__ = [
     "BitFlipMembershipMutation",
     "BitFlipMutationConfiguration",
+    "EvidenceWeightedRecombinationConfiguration",
     "EvidenceWeightedRecombinationCrossover",
     "HalfUniformMembershipCrossover",
     "MembershipRecombinationConfiguration",

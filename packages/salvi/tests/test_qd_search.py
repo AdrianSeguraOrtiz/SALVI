@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import replace as replace_dataclass
 from pathlib import Path
 
 import pyarrow as pa
@@ -13,10 +15,13 @@ from salvi.application.run_service import RunService
 from salvi.components.descriptors import ColumnCardinality, RowCardinality
 from salvi.components.protocols import Objective
 from salvi.domain import (
+    ArchiveCellTarget,
     ArchiveInsertionStatus,
     Bicluster,
     BinningStrategy,
+    BootstrapCellState,
     Candidate,
+    CandidateProvenance,
     ColumnKind,
     ColumnMetadata,
     Evaluation,
@@ -27,13 +32,14 @@ from salvi.domain import (
     ObjectiveDirection,
     ObjectiveResult,
     ObjectiveValue,
+    PatternKind,
 )
 from salvi.engine.archive import DeepGridMomeArchive
 from salvi.engine.dominance import objective_dominates
 from salvi.engine.grid import ArchiveAxisConfiguration, AxisBinner
 from salvi.engine.mome import SerialMomeSearchEngine
 from salvi.evaluation.workspace import EvaluationWorkspace
-from salvi.exceptions import ComponentError
+from salvi.exceptions import ComponentError, PatternSeedUnavailableError
 from salvi.infrastructure.bicluster_set import BiclusterSetReader
 from salvi.infrastructure.dataset_bundle import DatasetBundleWriter
 from salvi.infrastructure.events import SQLiteRunEventSource
@@ -52,6 +58,67 @@ class StaticObjective:
     def evaluate(self, candidate: Candidate, workspace: EvaluationWorkspace) -> ObjectiveResult:
         del candidate, workspace
         return ObjectiveResult(value=0.0, columns=())
+
+
+@dataclass(frozen=True, slots=True)
+class PartiallyUnavailableCellInitializer:
+    component_name: str = "partially_unavailable_cell_initializer"
+    provides: frozenset[str] = frozenset({"initialization", "cell-coverage-initialization"})
+    requires: frozenset[str] = frozenset()
+
+    def initialize(
+        self,
+        context: object,
+        count: int,
+        *,
+        start_sequence: int = 0,
+    ) -> Sequence[Candidate]:
+        del context, count, start_sequence
+        return ()
+
+    def bootstrap_plan(
+        self,
+        context: object,
+        targets: Sequence[ArchiveCellTarget],
+    ) -> Sequence[BootstrapCellState]:
+        del context
+        return tuple(
+            BootstrapCellState(
+                target=target,
+                required_patterns=(PatternKind.CONSTANT,),
+                maximum_attempts=1,
+            )
+            for target in targets
+        )
+
+    def initialize_bootstrap(
+        self,
+        context: object,
+        states: Sequence[BootstrapCellState],
+        *,
+        start_sequence: int = 0,
+    ) -> Sequence[Candidate]:
+        del context
+        state = states[0]
+        if state.target.coordinate.indices == (0, 0):
+            raise PatternSeedUnavailableError("fixture cell is intentionally unavailable")
+        target = state.target
+        return (
+            Candidate(
+                identifier=f"partial-{start_sequence:012d}",
+                bicluster=Bicluster(
+                    row_indices=tuple(range(target.row_count)),
+                    column_indices=tuple(range(target.column_count)),
+                ),
+                provenance=CandidateProvenance(
+                    producer=self.component_name,
+                    operation="fixture_seed",
+                    sequence=start_sequence,
+                    pattern_hint=PatternKind.CONSTANT,
+                    target_archive_coordinate=target.coordinate.indices,
+                ),
+            ),
+        )
 
 
 def _evaluation(
@@ -810,6 +877,51 @@ def test_serial_mome_bootstrap_visits_distinct_target_cells_before_retrying(
     assert all(target is not None for target in targets)
     assert sum(state.attempts for state in checkpoint.bootstrap_cells) == 3
     assert checkpoint.schema_version == 4
+
+
+def test_serial_mome_skips_an_unavailable_seed_cell_without_aborting(
+    tmp_path: Path,
+) -> None:
+    dataset = create_dataset_bundle(tmp_path / "dataset", rows=8, columns=3)
+    mapping = _scientific_mapping(dataset, tmp_path / "output", evaluations=6)
+    search = mapping["search"]
+    assert isinstance(search, dict)
+    search["archive"] = {
+        "name": "deep_grid_mome",
+        "parameters": {
+            "axes": [
+                {"descriptor": "row_cardinality", "binning": "EXACT"},
+                {"descriptor": "column_cardinality", "binning": "EXACT"},
+            ],
+            "cell_capacity": 4,
+        },
+    }
+    path = write_configuration(tmp_path / "configuration.yaml", mapping)
+    specification = build_specification(load_configuration(path).configuration)
+    specification = replace_dataclass(
+        specification,
+        initializer=PartiallyUnavailableCellInitializer(),
+    )
+    prepared = prepare_run(specification)
+    engine = SerialMomeSearchEngine(initial_population_size=2, configured_batch_size=3)
+
+    engine.initialize(specification, prepared.context)
+    candidates = tuple(engine.ask(3))
+    targets = tuple(
+        candidate.provenance.target_archive_coordinate
+        for candidate in candidates
+        if candidate.provenance is not None
+    )
+    checkpoint = engine.checkpoint()
+
+    assert len(candidates) == 3
+    assert (0, 0) not in targets
+    assert targets == ((0, 1), (1, 0), (1, 1))
+    assert sum(state.attempts for state in checkpoint.bootstrap_cells) == 4
+    unavailable = next(
+        state for state in checkpoint.bootstrap_cells if state.target.coordinate.indices == (0, 0)
+    )
+    assert unavailable.exhausted
 
 
 def test_pending_emitter_batch_restores_without_rescheduling(tmp_path: Path) -> None:

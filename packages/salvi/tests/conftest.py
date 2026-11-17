@@ -174,6 +174,9 @@ def run_context(dataset_bundle: Path) -> RunContext:
         patterns=PatternConfiguration(),
         random_streams=NamedRandomStreams(7),
         parent_selection_policy=RepertoireUniformParentSelection(),
-        candidate_validity_policy=MinimumCardinality(),
-        evaluation_support_policy=MinimumObservedSupport(),
+        candidate_validity_policy=MinimumCardinality(min_rows=2, min_columns=2),
+        evaluation_support_policy=MinimumObservedSupport(
+            min_observed_count=2,
+            min_observed_ratio=0.8,
+        ),
     )

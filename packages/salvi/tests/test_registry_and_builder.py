@@ -517,8 +517,10 @@ def _scientific_builder(dataset: Dataset):
         SalviRun.builder(dataset)
         .with_missing_values_policy(PreserveMissingValues())
         .add_numeric_transformation(RobustNumericScaling())
-        .with_candidate_validity_policy(MinimumCardinality())
-        .with_evaluation_support_policy(MinimumObservedSupport())
+        .with_candidate_validity_policy(MinimumCardinality(min_rows=2, min_columns=2))
+        .with_evaluation_support_policy(
+            MinimumObservedSupport(min_observed_count=2, min_observed_ratio=0.8)
+        )
         .with_search_engine(SerialMomeSearchEngine())
         .add_descriptor(RowCardinality())
         .add_descriptor(ColumnCardinality())
@@ -533,7 +535,7 @@ def _scientific_builder(dataset: Dataset):
         .with_scheduler(FirstEmitterScheduler())
         .with_initializer(UniformRandomInitializer())
         .with_executor(SerialEvaluationExecutor())
-        .with_termination(EvaluationBudget())
+        .with_termination(EvaluationBudget(max_evaluations=2))
     )
 
 

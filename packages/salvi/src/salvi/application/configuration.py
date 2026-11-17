@@ -66,7 +66,7 @@ class SearchConfiguration(StrictModel):
 
 class ExecutionConfiguration(StrictModel):
     executor: ComponentSpec
-    workers: Annotated[int, Field(ge=1)] = 1
+    workers: Annotated[int, Field(ge=1)] = 4
     cancellation_grace_seconds: Annotated[float, Field(gt=0.0)] = 5.0
 
 

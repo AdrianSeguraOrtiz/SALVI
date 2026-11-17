@@ -66,8 +66,13 @@ from salvi.domain import (
 )
 from salvi.domain.prepared import PreparedDataset
 from salvi.evaluation.workspace import EvaluationWorkspace
-from salvi.exceptions import ComponentError
-from salvi.patterns import PatternConfiguration
+from salvi.exceptions import ComponentError, PatternSeedUnavailableError
+from salvi.patterns import PatternConfiguration, PatternSeedShape
+from salvi.patterns.fitters import ConstantPatternFitter
+from salvi.patterns.seeding import (
+    ConstantPatternSeedStrategy,
+    _support_valid_row_selection,
+)
 
 
 def _numeric_context(
@@ -107,8 +112,11 @@ def _numeric_context(
         patterns=PatternConfiguration(allowed=patterns),
         random_streams=NamedRandomStreams(31),
         parent_selection_policy=RepertoireUniformParentSelection(),
-        candidate_validity_policy=MinimumCardinality(),
-        evaluation_support_policy=MinimumObservedSupport(),
+        candidate_validity_policy=MinimumCardinality(min_rows=2, min_columns=2),
+        evaluation_support_policy=MinimumObservedSupport(
+            min_observed_count=2,
+            min_observed_ratio=0.8,
+        ),
     )
 
 
@@ -286,7 +294,188 @@ def test_cell_coverage_initializer_uses_a_feasible_shape_inside_the_target_cell(
     assert candidate.provenance.target_archive_coordinate == (0, 0)
 
 
-def test_joint_pattern_seed_projects_away_from_marginally_supported_shape(
+def test_cell_coverage_initializer_tries_an_alternative_shape_after_failure(
+    tmp_path: Path,
+) -> None:
+    context = _numeric_context(tmp_path, (PatternKind.CONSTANT,))
+    initializer = CellCoveragePatternAwareInitializer(
+        seeds_per_cell=1,
+        max_attempts_per_cell=3,
+    )
+    target = ArchiveCellTarget(
+        coordinate=ArchiveCellCoordinate(indices=(0, 0)),
+        row_count=4,
+        column_count=4,
+        minimum_row_count=2,
+        maximum_row_count=4,
+        minimum_column_count=2,
+        maximum_column_count=4,
+    )
+    state = initializer.bootstrap_plan(context, (target,))[0]
+
+    preferred = initializer.initialize_bootstrap(context, (state,))[0]
+    retried = initializer.initialize_bootstrap(
+        context,
+        (state.model_copy(update={"attempts": 1}),),
+        start_sequence=1,
+    )[0]
+
+    assert (
+        len(preferred.bicluster.row_indices),
+        len(preferred.bicluster.column_indices),
+    ) == (4, 4)
+    assert (
+        len(retried.bicluster.row_indices),
+        len(retried.bicluster.column_indices),
+    ) == (4, 3)
+
+
+def test_pattern_seed_shape_projection_enumerates_bounded_alternatives(
+    tmp_path: Path,
+) -> None:
+    context = _numeric_context(tmp_path, (PatternKind.CONSTANT,))
+    strategy = ConstantPatternSeedStrategy(ConstantPatternFitter().definition)
+
+    assert strategy.project_shape(
+        context,
+        preferred_row_count=4,
+        row_range=(2, 4),
+        preferred_column_count=4,
+        column_range=(2, 4),
+        alternative_index=2,
+    ) == PatternSeedShape(row_count=3, column_count=4)
+    assert (
+        strategy.project_shape(
+            context,
+            preferred_row_count=4,
+            row_range=(2, 4),
+            preferred_column_count=4,
+            column_range=(2, 4),
+            alternative_index=20,
+        )
+        is None
+    )
+    with pytest.raises(ValueError, match="non-negative"):
+        strategy.project_shape(
+            context,
+            preferred_row_count=4,
+            row_range=(2, 4),
+            preferred_column_count=4,
+            column_range=(2, 4),
+            alternative_index=-1,
+        )
+
+
+def test_support_valid_row_selection_repairs_column_support(tmp_path: Path) -> None:
+    context = replace(
+        _numeric_context(tmp_path, (PatternKind.CONSTANT,)),
+        evaluation_support_policy=MinimumObservedSupport(
+            min_observed_count=2,
+            min_observed_ratio=0.5,
+        ),
+    )
+    scores = np.asarray([0.0, 1.0, 2.0, 3.0], dtype=np.float64)
+    support = np.asarray(
+        [
+            [True, True, False],
+            [True, True, False],
+            [True, False, True],
+            [False, True, True],
+        ],
+        dtype=np.bool_,
+    )
+
+    rows = _support_valid_row_selection(context, scores, support, 3, (0,))
+
+    assert rows == (0, 2, 3)
+    assert np.all(np.count_nonzero(support[np.asarray(rows)], axis=0) >= 2)
+
+
+def test_support_valid_row_selection_preserves_a_non_ranked_mandatory_row(
+    tmp_path: Path,
+) -> None:
+    context = replace(
+        _numeric_context(tmp_path, (PatternKind.CONSTANT,)),
+        evaluation_support_policy=MinimumObservedSupport(
+            min_observed_count=2,
+            min_observed_ratio=0.5,
+        ),
+    )
+    scores = np.asarray([0.0, 1.0, 2.0, 10.0], dtype=np.float64)
+    support = np.ones((4, 3), dtype=np.bool_)
+
+    rows = _support_valid_row_selection(context, scores, support, 3, (3,))
+
+    assert rows == (0, 1, 3)
+
+
+@pytest.mark.parametrize(
+    ("support", "mandatory_rows"),
+    [
+        (
+            [
+                [True, True, False],
+                [True, True, False],
+                [True, False, True],
+            ],
+            (0,),
+        ),
+        (
+            [
+                [True, True, False],
+                [True, True, False],
+                [True, False, True],
+                [True, True, False],
+            ],
+            (0,),
+        ),
+        (
+            [
+                [True, True, False],
+                [True, True, False],
+                [True, False, True],
+                [False, True, True],
+            ],
+            (0, 1, 2),
+        ),
+        (
+            [
+                [True, True, False],
+                [True, True, False],
+                [True, False, True],
+                [False, True, True],
+            ],
+            (0, 1),
+        ),
+    ],
+)
+def test_support_valid_row_selection_reports_unrepairable_support(
+    tmp_path: Path,
+    support: list[list[bool]],
+    mandatory_rows: tuple[int, ...],
+) -> None:
+    context = replace(
+        _numeric_context(tmp_path, (PatternKind.CONSTANT,)),
+        evaluation_support_policy=MinimumObservedSupport(
+            min_observed_count=2,
+            min_observed_ratio=0.5,
+        ),
+    )
+    scores = np.arange(len(support), dtype=np.float64)
+
+    assert (
+        _support_valid_row_selection(
+            context,
+            scores,
+            np.asarray(support, dtype=np.bool_),
+            3,
+            mandatory_rows,
+        )
+        is None
+    )
+
+
+def test_joint_pattern_seed_can_retry_a_marginally_supported_shape(
     tmp_path: Path,
 ) -> None:
     columns = {
@@ -328,7 +517,7 @@ def test_joint_pattern_seed_projects_away_from_marginally_supported_shape(
     )
     initializer = CellCoveragePatternAwareInitializer(
         seeds_per_cell=1,
-        max_attempts_per_cell=2,
+        max_attempts_per_cell=6,
         joint_column_candidate_pool_size=4,
     )
     target = ArchiveCellTarget(
@@ -342,7 +531,12 @@ def test_joint_pattern_seed_projects_away_from_marginally_supported_shape(
     )
 
     plan = initializer.bootstrap_plan(context, (target,))
-    candidate = initializer.initialize_bootstrap(context, plan)[0]
+    with pytest.raises(PatternSeedUnavailableError):
+        initializer.initialize_bootstrap(context, plan)
+    candidate = initializer.initialize_bootstrap(
+        context,
+        (plan[0].model_copy(update={"attempts": 4}),),
+    )[0]
 
     assert len(candidate.bicluster.row_indices) == 12
     assert len(candidate.bicluster.column_indices) == 4
@@ -761,6 +955,24 @@ def test_shape_emitter_guided_paths_and_fallback(run_context: RunContext) -> Non
     assert fallback.provenance.operation == "restart_fallback"
 
 
+def test_guided_shape_moves_sample_both_directions_reproducibly(tmp_path: Path) -> None:
+    context = _numeric_context(tmp_path, (PatternKind.CONSTANT,))
+    parent = _scientific_evaluation(context, (0, 1, 2), (0, 1, 2), "parent")
+    repertoire = Repertoire(evaluations=(parent,))
+    emitter = ShapeMoveEmitter(guided=True)
+    children = emitter.emit(context, repertoire, 256)
+    replay = emitter.emit(replace(context, random_streams=NamedRandomStreams(31)), repertoire, 256)
+    assert children == replay
+    row_expansions = sum(len(child.bicluster.row_indices) == 4 for child in children)
+    assert 64 < row_expansions < 192
+    for child in children:
+        context.candidate_validity_policy.validate(child, context.dataset)
+        assert (len(child.bicluster.row_indices), len(child.bicluster.column_indices)) in {
+            (4, 2),
+            (2, 4),
+        }
+
+
 def test_recombination_probability_and_restart_fallbacks(run_context: RunContext) -> None:
     generator = NamedRandomStreams(3).generator("recombination-test")
     first = (0, 1, 2)
@@ -824,6 +1036,16 @@ def test_cell_coverage_restart_targets_reachable_archive_cells(
         (len(candidate.bicluster.row_indices), len(candidate.bicluster.column_indices))
         for candidate in generated
     } <= {(3, 2), (4, 3)}
+    assert {
+        candidate.provenance.target_archive_coordinate
+        for candidate in generated
+        if candidate.provenance is not None
+    } == {(0, 0), (1, 1)}
+    assert {
+        candidate.provenance.pattern_hint
+        for candidate in generated
+        if candidate.provenance is not None
+    } == set(PatternKind)
     assert emitter.emit(context, Repertoire(), 0) == ()
     with pytest.raises(ValueError, match="non-negative"):
         emitter.emit(context, Repertoire(), -1)

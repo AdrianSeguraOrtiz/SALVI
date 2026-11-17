@@ -32,7 +32,7 @@ from salvi.domain.search import (
     SearchProgress,
     SearchUpdate,
 )
-from salvi.exceptions import ComponentError
+from salvi.exceptions import ComponentError, PatternSeedUnavailableError
 
 
 class SerialMomeConfiguration(BaseModel):
@@ -274,26 +274,35 @@ class SerialMomeSearchEngine:
                 key=lambda value: (value.attempts, value.target.coordinate.indices),
             )
             if not item.complete and not item.exhausted
-        )[:count]
+        )
         if not available:
             return ()
         started = perf_counter()
-        generated = tuple(
-            initializer.initialize_bootstrap(
-                context,
-                available,
-                start_sequence=self._next_candidate_sequence,
-            )
-        )
+        generated: list[Candidate] = []
+        attempted: set[tuple[int, ...]] = set()
+        for state in available:
+            if len(generated) >= count:
+                break
+            attempted.add(state.target.coordinate.indices)
+            try:
+                candidate_batch = tuple(
+                    initializer.initialize_bootstrap(
+                        context,
+                        (state,),
+                        start_sequence=self._next_candidate_sequence + len(generated),
+                    )
+                )
+            except PatternSeedUnavailableError:
+                continue
+            if len(candidate_batch) != 1:
+                raise ComponentError(
+                    "cell-coverage initializer must return one candidate per requested cell"
+                )
+            generated.append(candidate_batch[0])
         self._record_timing(
             f"initializer.{initializer.component_name}",
             perf_counter() - started,
         )
-        if len(generated) != len(available):
-            raise ComponentError(
-                "cell-coverage initializer must return one candidate per requested cell"
-            )
-        attempted = {item.target.coordinate.indices for item in available}
         self._bootstrap_cells = tuple(
             item.model_copy(update={"attempts": item.attempts + 1})
             if item.target.coordinate.indices in attempted
@@ -301,7 +310,7 @@ class SerialMomeSearchEngine:
             for item in self._bootstrap_cells
         )
         self._next_candidate_sequence += len(generated)
-        return generated
+        return tuple(generated)
 
     def tell(self, evaluations: Sequence[Evaluation]) -> SearchUpdate:
         specification, _context, archive = self._require_initialized()

@@ -13,7 +13,7 @@ import numpy.typing as npt
 from salvi.application.context import RunContext
 from salvi.domain.enums import PatternKind
 from salvi.domain.search import ArchiveCellTarget
-from salvi.exceptions import ComponentError
+from salvi.exceptions import ComponentError, PatternSeedUnavailableError
 from salvi.patterns.contracts import (
     PatternDefinition,
     PatternSeed,
@@ -167,22 +167,41 @@ class _BasePatternSeedStrategy:
         row_range: tuple[int, int],
         preferred_column_count: int,
         column_range: tuple[int, int],
+        alternative_index: int = 0,
     ) -> PatternSeedShape | None:
+        if alternative_index < 0:
+            raise ValueError("pattern seed alternative index must be non-negative")
         limits = self._shape_limits(context, row_range=row_range, column_range=column_range)
         if limits is None:
             return None
         minimum_rows, maximum_rows, minimum_columns, maximum_columns = limits
         row_counts = _ordered_cardinalities(preferred_row_count, minimum_rows, maximum_rows)
-        for row_count in row_counts:
-            capacity = len(self._eligible_columns(context, row_count))
-            available_maximum = min(maximum_columns, capacity)
-            if available_maximum < minimum_columns:
-                continue
-            column_count = min(
-                max(preferred_column_count, minimum_columns),
-                available_maximum,
-            )
-            return PatternSeedShape(row_count=row_count, column_count=column_count)
+        column_counts = _ordered_cardinalities(
+            preferred_column_count,
+            minimum_columns,
+            maximum_columns,
+        )
+        column_capacities: dict[int, int] = {}
+        feasible_index = 0
+        for diagonal in range(len(row_counts) + len(column_counts) - 1):
+            for row_offset in range(diagonal + 1):
+                column_offset = diagonal - row_offset
+                if row_offset >= len(row_counts) or column_offset >= len(column_counts):
+                    continue
+                row_count = row_counts[row_offset]
+                column_count = column_counts[column_offset]
+                capacity = column_capacities.get(row_count)
+                if capacity is None:
+                    capacity = len(self._eligible_columns(context, row_count))
+                    column_capacities[row_count] = capacity
+                if column_count > capacity:
+                    continue
+                if feasible_index == alternative_index:
+                    return PatternSeedShape(
+                        row_count=row_count,
+                        column_count=column_count,
+                    )
+                feasible_index += 1
         return None
 
     def _shape_limits(
@@ -209,6 +228,8 @@ class _BasePatternSeedStrategy:
         self,
         context: RunContext,
         target: ArchiveCellTarget,
+        *,
+        alternative_index: int = 0,
     ) -> PatternSeedShape | None:
         return self.project_shape(
             context,
@@ -216,6 +237,7 @@ class _BasePatternSeedStrategy:
             row_range=target.row_range,
             preferred_column_count=target.column_count,
             column_range=target.column_range,
+            alternative_index=alternative_index,
         )
 
 
@@ -233,13 +255,15 @@ class ConstantPatternSeedStrategy(_BasePatternSeedStrategy):
         dataset = context.dataset
         eligible = self._eligible_columns(context, shape.row_count)
         if len(eligible) < shape.column_count:
-            raise ComponentError(
+            raise PatternSeedUnavailableError(
                 f"{self.pattern.value} seeding has fewer support-eligible columns than requested"
             )
         support = dataset.support_matrix()[:, np.asarray(eligible, dtype=np.int64)]
         anchor_candidates = np.flatnonzero(np.any(support, axis=1))
         if anchor_candidates.size == 0:
-            raise ComponentError(f"{self.pattern.value} seeding found no observed anchor row")
+            raise PatternSeedUnavailableError(
+                f"{self.pattern.value} seeding found no observed anchor row"
+            )
         attempts = min(16, len(anchor_candidates))
         anchors = generator.choice(anchor_candidates, attempts, replace=False)
         candidate_columns = np.asarray(eligible, dtype=np.int64)
@@ -264,9 +288,16 @@ class ConstantPatternSeedStrategy(_BasePatternSeedStrategy):
             refined_scores = _constant_row_scores(context, anchor, columns)
             if np.count_nonzero(np.isfinite(refined_scores)) < shape.row_count:
                 continue
-            rows = tuple(
-                sorted(int(index) for index in np.argsort(refined_scores)[: shape.row_count])
+            selected_support = dataset.support_matrix()[:, np.asarray(columns, dtype=np.int64)]
+            rows = _support_valid_row_selection(
+                context,
+                refined_scores,
+                selected_support,
+                shape.row_count,
+                (anchor,),
             )
+            if rows is None:
+                continue
             final_errors = constant_column_errors(
                 context,
                 rows,
@@ -274,7 +305,7 @@ class ConstantPatternSeedStrategy(_BasePatternSeedStrategy):
             )
             if np.all(np.isfinite(final_errors)):
                 return PatternSeed(rows=rows, columns=columns)
-        raise ComponentError(
+        raise PatternSeedUnavailableError(
             f"{self.pattern.value} seeding could not construct a support-valid anchor"
         )
 
@@ -435,58 +466,6 @@ def _support_valid_row_selection(
 
 @dataclass(frozen=True, slots=True)
 class _JointPatternSeedStrategy(_BasePatternSeedStrategy):
-    def project_shape(
-        self,
-        context: RunContext,
-        *,
-        preferred_row_count: int,
-        row_range: tuple[int, int],
-        preferred_column_count: int,
-        column_range: tuple[int, int],
-    ) -> PatternSeedShape | None:
-        limits = self._shape_limits(context, row_range=row_range, column_range=column_range)
-        if limits is None:
-            return None
-        minimum_rows, maximum_rows, minimum_columns, maximum_columns = limits
-        support = context.dataset.support_matrix()
-        global_support = np.count_nonzero(support, axis=0)
-        for row_count in _ordered_cardinalities(
-            preferred_row_count,
-            minimum_rows,
-            maximum_rows,
-        ):
-            eligible = self._eligible_columns(context, row_count)
-            available_maximum = min(maximum_columns, len(eligible))
-            if available_maximum < minimum_columns:
-                continue
-            for column_count in _ordered_cardinalities(
-                preferred_column_count,
-                minimum_columns,
-                available_maximum,
-            ):
-                eligible_array = np.asarray(eligible, dtype=np.int64)
-                order = np.lexsort((eligible_array, -global_support[eligible_array]))
-                columns = eligible_array[order[:column_count]]
-                selected_support = support[:, columns]
-                required_per_row = context.evaluation_support_policy.required_observations(
-                    column_count
-                )
-                support_valid_rows = np.count_nonzero(selected_support, axis=1) >= required_per_row
-                if np.count_nonzero(support_valid_rows) < row_count:
-                    continue
-                required_per_column = context.evaluation_support_policy.required_observations(
-                    row_count
-                )
-                if np.all(
-                    np.count_nonzero(selected_support[support_valid_rows], axis=0)
-                    >= required_per_column
-                ):
-                    return PatternSeedShape(
-                        row_count=row_count,
-                        column_count=column_count,
-                    )
-        return None
-
     def generate(
         self,
         context: RunContext,
@@ -498,7 +477,7 @@ class _JointPatternSeedStrategy(_BasePatternSeedStrategy):
         dataset = context.dataset
         eligible = self._eligible_columns(context, shape.row_count)
         if len(eligible) < shape.column_count:
-            raise ComponentError(
+            raise PatternSeedUnavailableError(
                 f"{self.pattern.value} seeding requires at least {shape.column_count} "
                 "support-eligible columns"
             )
@@ -572,7 +551,7 @@ class _JointPatternSeedStrategy(_BasePatternSeedStrategy):
             candidate_support = selected_support[np.asarray(rows, dtype=np.int64)]
             if np.all(np.count_nonzero(candidate_support, axis=0) >= required):
                 return PatternSeed(rows=rows, columns=columns)
-        raise ComponentError(
+        raise PatternSeedUnavailableError(
             f"{self.pattern.value} seeding could not construct a support-valid joint anchor"
         )
 

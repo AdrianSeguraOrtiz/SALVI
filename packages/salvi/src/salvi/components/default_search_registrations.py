@@ -44,6 +44,7 @@ from salvi.components.objectives import (
 from salvi.components.operators import (
     BitFlipMembershipMutation,
     BitFlipMutationConfiguration,
+    EvidenceWeightedRecombinationConfiguration,
     EvidenceWeightedRecombinationCrossover,
     HalfUniformMembershipCrossover,
     MembershipRecombinationConfiguration,
@@ -209,16 +210,16 @@ def default_search_registrations() -> tuple[ComponentRegistration, ...]:
         _registration(
             ComponentKind.CROSSOVER_OPERATOR,
             "evidence_weighted_recombination",
-            MembershipRecombinationConfiguration,
+            EvidenceWeightedRecombinationConfiguration,
             lambda config: EvidenceWeightedRecombinationCrossover(
                 application_probability=cast(
-                    MembershipRecombinationConfiguration, config
+                    EvidenceWeightedRecombinationConfiguration, config
                 ).application_probability,
                 row_exchange_probability=cast(
-                    MembershipRecombinationConfiguration, config
+                    EvidenceWeightedRecombinationConfiguration, config
                 ).row_exchange_probability,
                 column_exchange_probability=cast(
-                    MembershipRecombinationConfiguration, config
+                    EvidenceWeightedRecombinationConfiguration, config
                 ).column_exchange_probability,
             ),
         ),

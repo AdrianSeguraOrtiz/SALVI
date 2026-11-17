@@ -18,14 +18,14 @@ from salvi.exceptions import ComponentError
 class MinimumCardinalityConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    min_rows: Annotated[int, Field(ge=1)] = 2
-    min_columns: Annotated[int, Field(ge=1)] = 2
+    min_rows: Annotated[int, Field(ge=1)] = 10
+    min_columns: Annotated[int, Field(ge=1)] = 10
 
 
 @dataclass(frozen=True, slots=True)
 class MinimumCardinality:
-    min_rows: int = 2
-    min_columns: int = 2
+    min_rows: int = 10
+    min_columns: int = 10
     component_name: str = "minimum_cardinality"
     provides: frozenset[str] = frozenset({"candidate-validity"})
     requires: frozenset[str] = frozenset({"prepared-dataset"})
@@ -82,7 +82,7 @@ class ObservedSupportConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     min_observed_count: Annotated[int, Field(ge=2)] = 2
-    min_observed_ratio: Annotated[float, Field(ge=0.0, le=1.0)] = 0.8
+    min_observed_ratio: Annotated[float, Field(ge=0.0, le=1.0)] = 0.5
 
 
 @lru_cache(maxsize=4096)
@@ -97,7 +97,7 @@ def _required_observations(
 @dataclass(frozen=True, slots=True)
 class MinimumObservedSupport:
     min_observed_count: int = 2
-    min_observed_ratio: float = 0.8
+    min_observed_ratio: float = 0.5
     component_name: str = "minimum_observed_support"
     provides: frozenset[str] = frozenset({"evaluation-support"})
     requires: frozenset[str] = frozenset({"prepared-dataset"})

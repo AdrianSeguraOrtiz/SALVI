@@ -297,7 +297,7 @@ class ResourceUsageObserver:
 
 @dataclass(slots=True)
 class CandidateDiversityObserver:
-    window_size: int = 128
+    window_size: int = 512
     distance_sample_size: int = 128
     row_weight: float = 0.5
     every_evaluations: int = 1_000

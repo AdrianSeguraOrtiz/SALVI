@@ -86,7 +86,7 @@ def _prepared_context(
             max_iterations=max_iterations,
         ),
         random_streams=NamedRandomStreams(7),
-        candidate_validity_policy=MinimumCardinality(),
+        candidate_validity_policy=MinimumCardinality(min_rows=2, min_columns=2),
         evaluation_support_policy=MinimumObservedSupport(
             min_observed_count=2,
             min_observed_ratio=min_observed_ratio,

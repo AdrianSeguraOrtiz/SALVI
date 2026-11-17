@@ -19,7 +19,7 @@ from salvi.domain.models import (
     CandidateProvenance,
 )
 from salvi.domain.search import ArchiveCellTarget, BootstrapCellState, CandidateBounds
-from salvi.exceptions import ComponentError
+from salvi.exceptions import ComponentError, PatternSeedUnavailableError
 from salvi.patterns.catalog import PatternCatalog, default_pattern_catalog
 from salvi.patterns.contracts import PatternSeedStrategy
 
@@ -399,10 +399,16 @@ class CellCoveragePatternAwareInitializer:
                 raise ComponentError("completed bootstrap state was requested for initialization")
             target = state.target
             strategy = _seed_strategy(catalog, pattern)
-            shape = strategy.project_target(context, target)
+            failed_attempts = state.attempts - len(state.accepted_patterns)
+            shape = strategy.project_target(
+                context,
+                target,
+                alternative_index=failed_attempts,
+            )
             if shape is None:
-                raise ComponentError(
-                    f"{pattern.value} seed cannot reach archive cell {target.coordinate.indices}"
+                raise PatternSeedUnavailableError(
+                    f"{pattern.value} seed exhausted feasible shapes in archive cell "
+                    f"{target.coordinate.indices}"
                 )
             seed = strategy.generate(
                 context,

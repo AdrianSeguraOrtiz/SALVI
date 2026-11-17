@@ -26,8 +26,8 @@ from salvi.components.candidate_initialization import (
 )
 from salvi.domain.enums import ColumnKind, PatternKind
 from salvi.domain.models import Candidate, Evaluation, PatternFit, Repertoire
-from salvi.domain.search import BootstrapCellState
-from salvi.exceptions import ComponentError
+from salvi.domain.search import ArchiveCellTarget, BootstrapCellState
+from salvi.exceptions import ComponentError, PatternSeedUnavailableError
 from salvi.patterns.catalog import default_pattern_catalog
 from salvi.patterns.joint_models import robust_column_scales
 from salvi.patterns.math import nanmedian_2d
@@ -37,7 +37,7 @@ from salvi.patterns.seeding import constant_column_errors
 class MembershipEmitterConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    guided: bool = False
+    guided: bool = True
     parent_pool_size: Annotated[int, Field(ge=1)] = 16
     candidate_pool_size: Annotated[int, Field(ge=1)] = 64
 
@@ -446,7 +446,7 @@ def _select_parent(
 class MembershipMoveEmitter:
     dimension: Dimension
     operation: MembershipOperation
-    guided: bool = False
+    guided: bool = True
     parent_pool_size: int = 16
     candidate_pool_size: int = 64
     component_name: str = "membership_move"
@@ -659,7 +659,7 @@ class RandomMoveEmitter:
 
 @dataclass(frozen=True, slots=True)
 class ShapeMoveEmitter:
-    guided: bool = False
+    guided: bool = True
     parent_pool_size: int = 16
     candidate_pool_size: int = 64
     component_name: str = "shape_move"
@@ -732,11 +732,7 @@ class ShapeMoveEmitter:
                 and len(bicluster.row_indices) > bounds.min_rows
             ):
                 directions.append("column_expand")
-            direction = (
-                min(directions)
-                if self.guided
-                else directions[int(generator.integers(0, len(directions)))]
-            )
+            direction = directions[int(generator.integers(0, len(directions)))]
             if direction == "row_expand":
                 rows = _random_membership_move(
                     bicluster.row_indices,
@@ -930,29 +926,56 @@ class CellCoverageRestartEmitter:
                 reachable_by_pattern.append((pattern, reachable))
         if not reachable_by_pattern:
             raise ComponentError("cell-coverage restart found no reachable archive cell")
+        scheduled_cells: dict[tuple[int, ...], int] = {}
+        scheduled_patterns: dict[PatternKind, int] = {}
+        scheduled_pairs: dict[tuple[tuple[int, ...], PatternKind], int] = {}
         for index in range(count):
-            pattern, reachable = reachable_by_pattern[
-                (start_sequence + index) % len(reachable_by_pattern)
-            ]
-            target = min(
-                reachable,
+            options = sorted(
+                (
+                    (pattern, target)
+                    for pattern, reachable in reachable_by_pattern
+                    for target in reachable
+                ),
                 key=lambda item: (
-                    occupancy[item.coordinate.indices],
-                    item.coordinate.indices,
+                    occupancy[item[1].coordinate.indices]
+                    + scheduled_cells.get(item[1].coordinate.indices, 0),
+                    scheduled_patterns.get(item[0], 0),
+                    scheduled_pairs.get((item[1].coordinate.indices, item[0]), 0),
+                    item[1].coordinate.indices,
+                    item[0].value,
                 ),
             )
-            state = BootstrapCellState(
-                target=target,
-                required_patterns=(pattern,),
-                maximum_attempts=1,
-            )
-            candidate = initializer.initialize_bootstrap(
-                qd_context,
-                (state,),
-                start_sequence=start_sequence + index,
-            )[0]
+            candidate: Candidate | None = None
+            target: ArchiveCellTarget | None = None
+            for pattern, option in options:
+                state = BootstrapCellState(
+                    target=option,
+                    required_patterns=(pattern,),
+                    maximum_attempts=1,
+                )
+                try:
+                    candidate = initializer.initialize_bootstrap(
+                        qd_context,
+                        (state,),
+                        start_sequence=start_sequence + index,
+                    )[0]
+                except PatternSeedUnavailableError:
+                    continue
+                target = option
+                break
+            if candidate is None or target is None:
+                raise PatternSeedUnavailableError(
+                    "cell-coverage restart could not construct a seed in any reachable cell"
+                )
             provenance = candidate.provenance
-            assert provenance is not None
+            if provenance is None or provenance.pattern_hint is None:
+                raise ComponentError("cell-coverage restart seed lacks a pattern hint")
+            coordinate = target.coordinate.indices
+            pattern = provenance.pattern_hint
+            scheduled_cells[coordinate] = scheduled_cells.get(coordinate, 0) + 1
+            scheduled_patterns[pattern] = scheduled_patterns.get(pattern, 0) + 1
+            pair = (coordinate, pattern)
+            scheduled_pairs[pair] = scheduled_pairs.get(pair, 0) + 1
             generated.append(
                 candidate.model_copy(
                     update={

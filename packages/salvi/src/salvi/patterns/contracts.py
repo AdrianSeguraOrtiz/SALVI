@@ -186,12 +186,15 @@ class PatternSeedStrategy(Protocol):
         row_range: tuple[int, int],
         preferred_column_count: int,
         column_range: tuple[int, int],
+        alternative_index: int = 0,
     ) -> PatternSeedShape | None: ...
 
     def project_target(
         self,
         context: RunContext,
         target: ArchiveCellTarget,
+        *,
+        alternative_index: int = 0,
     ) -> PatternSeedShape | None: ...
 
     def generate(

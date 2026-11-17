@@ -22,7 +22,7 @@ class DistributionObserverConfiguration(BaseModel):
 
 
 class CandidateDiversityObserverConfiguration(DistributionObserverConfiguration):
-    window_size: Annotated[int, Field(ge=2)] = 128
+    window_size: Annotated[int, Field(ge=2)] = 512
     distance_sample_size: Annotated[int, Field(ge=2)] = 128
     row_weight: Annotated[float, Field(ge=0.0, le=1.0)] = 0.5
 

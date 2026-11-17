@@ -13,6 +13,10 @@ class ComponentError(SalviError):
     """Raised when component registration or composition fails."""
 
 
+class PatternSeedUnavailableError(ComponentError):
+    """Raised when one requested seed cannot be constructed from the available data."""
+
+
 class ArtifactError(SalviError):
     """Raised when a canonical artifact violates its contract."""
 

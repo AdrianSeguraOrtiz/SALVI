@@ -53,6 +53,8 @@ class ThreadPoolEvaluationConfiguration(BaseModel):
 class ProcessPoolEvaluationConfiguration(ThreadPoolEvaluationConfiguration):
     """Configuration shared by bounded CPU-oriented process workers."""
 
+    max_in_flight: Annotated[int, Field(ge=1)] | None = 8
+
 
 def _evaluate_candidate(
     candidate: Candidate,
@@ -559,7 +561,7 @@ class ProcessPoolEvaluationExecutor:
     """Evaluate CPU-bound candidates in bounded persistent worker processes."""
 
     configured_integration_mode: EvaluationIntegrationMode = EvaluationIntegrationMode.DETERMINISTIC
-    configured_max_in_flight: int | None = None
+    configured_max_in_flight: int | None = 8
     component_name: str = "process_pool"
     provides: frozenset[str] = frozenset({"evaluation"})
     requires: frozenset[str] = frozenset({"objective"})

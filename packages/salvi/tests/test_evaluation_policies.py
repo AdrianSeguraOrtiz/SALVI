@@ -18,7 +18,7 @@ def test_minimum_cardinality_accepts_valid_candidates_and_rejects_invalid_ones(
     )
 
     with pytest.raises(ComponentError, match="at least 3"):
-        MinimumCardinality(min_rows=3).validate(
+        MinimumCardinality(min_rows=3, min_columns=2).validate(
             Candidate(bicluster=Bicluster(row_indices=(0, 1), column_indices=(0, 1))),
             run_context.dataset,
         )
@@ -33,9 +33,9 @@ def test_minimum_cardinality_accepts_valid_candidates_and_rejects_invalid_ones(
             run_context.dataset,
         )
     with pytest.raises(ComponentError, match="exceeds the dataset row count"):
-        MinimumCardinality(min_rows=99).validate_dataset(run_context.dataset)
+        MinimumCardinality(min_rows=99, min_columns=2).validate_dataset(run_context.dataset)
     with pytest.raises(ComponentError, match="exceeds the prepared column count"):
-        MinimumCardinality(min_columns=99).validate_dataset(run_context.dataset)
+        MinimumCardinality(min_rows=2, min_columns=99).validate_dataset(run_context.dataset)
 
 
 def test_observed_support_combines_absolute_and_relative_thresholds() -> None:
