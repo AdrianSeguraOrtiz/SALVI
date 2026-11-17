@@ -87,7 +87,12 @@ class WebProviderRegistry:
 
     def load_entry_points(self) -> None:
         selected = entry_points(group="salvi.web.providers")
-        for entry_point in sorted(selected, key=lambda item: item.name):
+        loaded: set[tuple[str, str]] = set()
+        for entry_point in sorted(selected, key=lambda item: (item.name, item.value)):
+            identity = (entry_point.name, entry_point.value)
+            if identity in loaded:
+                continue
+            loaded.add(identity)
             factory = entry_point.load()
             provider = factory()
             if not isinstance(provider, WebExtensionProvider):

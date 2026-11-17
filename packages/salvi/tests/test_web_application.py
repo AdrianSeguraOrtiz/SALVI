@@ -22,6 +22,7 @@ from salvi.application.configuration import (
 from salvi.application.defaults import default_scientific_configuration
 from salvi.components.catalog import WorkflowConnectionKind, WorkflowStage, role_catalog
 from salvi.components.defaults import default_component_registry
+from salvi.components.protocols import ComponentKind
 from salvi.domain.enums import ColumnKind, RunStatus, SearchFamily
 from salvi.exceptions import ConfigurationError, ConversionError, RunCancelledError
 from salvi.web.adapters import (
@@ -95,6 +96,43 @@ def test_default_pipeline_uses_cell_compartmentalized_qd_components() -> None:
         "candidate_diversity",
         "runtime_throughput",
         "resource_usage",
+    )
+
+    registry = default_component_registry()
+    assert registry.resolve_parameters(
+        ComponentKind.CANDIDATE_VALIDITY_POLICY,
+        "minimum_cardinality",
+        {},
+    ) == {"min_rows": 10, "min_columns": 10}
+    assert registry.resolve_parameters(
+        ComponentKind.EVALUATION_SUPPORT_POLICY,
+        "minimum_observed_support",
+        {},
+    ) == {"min_observed_count": 2, "min_observed_ratio": 0.5}
+    assert (
+        registry.resolve_parameters(
+            ComponentKind.CROSSOVER_OPERATOR,
+            "evidence_weighted_recombination",
+            {},
+        )["application_probability"]
+        == 1.0
+    )
+    assert registry.resolve_parameters(ComponentKind.EMITTER, "add_row", {})["guided"]
+    assert (
+        registry.resolve_parameters(
+            ComponentKind.EVALUATION_EXECUTOR,
+            "process_pool",
+            {},
+        )["max_in_flight"]
+        == 8
+    )
+    assert (
+        registry.resolve_parameters(
+            ComponentKind.TERMINATION,
+            "evaluation_budget",
+            {},
+        )["max_evaluations"]
+        == 50_000
     )
 
 
@@ -575,6 +613,27 @@ def test_provider_registry_rejects_duplicates_and_unknown_names() -> None:
         registry.analysis("missing")
 
 
+def test_provider_registry_loads_an_identical_entry_point_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = TabularInputAdapter(",", "external", "External", ".csv")
+    provider = WebExtensionProvider(adapters=(adapter,))
+    entry_point = SimpleNamespace(
+        name="experiments",
+        value="package.provider:create_provider",
+        load=lambda: lambda: provider,
+    )
+    monkeypatch.setattr(
+        "salvi.web.providers.entry_points",
+        lambda **_keywords: (entry_point, entry_point),
+    )
+    registry = WebProviderRegistry()
+
+    registry.load_entry_points()
+
+    assert registry.adapter("external") is adapter
+
+
 def test_import_service_rejects_inconsistent_files_and_confirmation(
     tmp_path: Path,
 ) -> None:
@@ -697,6 +756,9 @@ def test_web_api_validates_pipeline_text_and_upload_boundaries(tmp_path: Path) -
     )
     with TestClient(app) as client:
         default = client.get("/api/v1/pipelines/default").json()["yaml"]
+        assert parse_pipeline_configuration(default) == PipelineConfiguration.model_validate(
+            default_scientific_configuration()
+        )
         validated = client.post(
             "/api/v1/pipelines/validate",
             content=default,
